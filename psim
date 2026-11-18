@@ -19,7 +19,7 @@
 #   * mode arbre (--tree / touche t) : hiérarchie des ppid, l'indentation
 #     se prend sur les colonnes de commande et d'arguments ;
 #   * souris en mode dynamique : clic = sélection de la ligne, double-clic =
-#     détails du processus, molette = défilement de la vue ;
+#     détails du processus ;
 #   * journal borné (rotation) ;
 #   * options inconnues, arguments en trop et valeurs invalides refusés.
 #
@@ -56,8 +56,8 @@ declare -i MOUSE_BTN=-1 MOUSE_Y=0 MOUSE_REL=0
 declare -i CLICK_LAST=0 CLICK_ROW=0 DOUBLE=0
 declare -i REDRAW=0               # l'événement souris a-t-il changé quelque chose ?
 declare -i CLICK_US=400000        # 400 ms : la tolérance usuelle d'un double-clic
-# Molette : neutralisée sur demande (les événements sont quand même drainés, le
-# terminal n'a pas d'autre usage). WHEEL=1 rend le défilement de la vue.
+# Molette : les événements sont drainés puis ignorés (WHEEL=0), le terminal n'a
+# pas d'autre usage ; WHEEL=1 activerait le défilement de la vue.
 declare -i WHEEL=0 WHEEL_STEP=3
 declare -i NOWTIC=0               # horodatage courant (µs), posé par NOW_US
 # Flèches maintenues : la répétition rapprochée accélère le déplacement
@@ -1317,7 +1317,7 @@ NOW_US() {
 # Clic gauche : la ligne sous le curseur devient la sélection ; deux appuis
 # rapprochés sur la même ligne ouvrent la boîte de détails (DOUBLE). Hors du
 # tableau (entête, ligne de statut, pied de page, sous la dernière ligne) : rien.
-# Molette : la vue seule défile, la sélection ne bouge pas.
+# Les crans de molette sont drainés puis ignorés (WHEEL=0).
 MOUSE_ACT() {
     local -i i max_off step=${WHEEL_STEP} prev release_only
     # REDRAW reste à 0 quand l'événement ne change rien (relâchement, molette
