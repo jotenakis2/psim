@@ -1,0 +1,482 @@
+.\" psim(1) -- page de manuel française
+.\" Copyright (C) 2026 jotenakis
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH PSIM 1 "2026-11-18" "psim 1.7.0" "Commandes utilisateur"
+.SH NOM
+psim \- table des processus lisible à partir de la sortie de ps
+.SH SYNOPSIS
+.B psim
+.RI [ OPTIONS ]
+.RI [ \-\- N ]
+.SH DESCRIPTION
+.B psim
+récupère la liste des processus auprès de
+.BR ps (1)
+et l'affiche sous forme de tableau aligné, éventuellement coloré, avec un pied
+de page récapitulatif, tri, filtre et arbre des processus.
+.PP
+Sur un terminal,
+.B psim
+se comporte comme un moniteur rafraîchi en continu, piloté au clavier et à la
+souris.
+Lorsque l'entrée ou la sortie standard n'est pas un terminal, ou lorsqu'on
+donne
+.B \-\-N
+ou
+.BI \-\-watch " 0" ,
+il produit une seule trame statique : une ligne par processus, sans séquence
+ANSI, sans remplissage ni troncature, donc utilisable dans un tube ou un
+fichier comme
+.BR ps .
+.PP
+Par défaut le tableau utilise la colonne simplifiée
+.RB ( \-\-newbie ) ;
+.B \-\-normal
+sélectionne le jeu de colonnes complet.
+Les terminaux de moins de 100 colonnes passent de force en affichage simplifié,
+et le mode interactif refuse les terminaux plus petits que 60x6.
+.PP
+Les options courtes se groupent :
+.B psim \-pn
+équivaut à
+.BR "psim \-p \-n" ,
+.B psim \-w5
+transmet 5 à
+.BR \-w ,
+et
+.B psim \-gfirefox
+transmet
+.I firefox
+à
+.BR \-g .
+.SH OPTIONS
+.TP
+.B \-p, \-\-pid
+Tri par PID (croissant).
+.TP
+.B \-P, \-\-ppid
+Tri par PID du parent (croissant).
+.TP
+.B \-c, \-\-cpu
+Tri par consommation CPU, décroissant.
+.TP
+.B \-m, \-\-mem
+Tri par mémoire résidente, décroissant.
+.TP
+.B \-N, \-\-nice
+Tri par valeur nice (croissant).
+.TP
+.B \-u, \-\-user
+Tri par nom de propriétaire (croissant).
+.TP
+.B \-C, \-\-cmd
+Tri par nom de commande (croissant) et affichage de la ligne de commande.
+.TP
+.B \-t, \-\-tree
+Range chaque processus sous son parent d'après le PID parent.
+Le tri actif ordonne les frères.
+Un processus dont le parent n'est pas dans la liste ouvre une nouvelle racine :
+on obtient une forêt, jamais une branche coupée.
+L'indentation ne s'applique qu'aux colonnes de commande et d'arguments ; les
+colonnes de PID ne bougent pas.
+.TP
+.B \-n, \-\-newbie
+Affichage simplifié : PID, USER, mémoire résidente en MiB, %CPU et commande.
+C'est le mode par défaut.
+.TP
+.B \-\-normal
+Affichage complet : PID, PPID, USER, NI, RSS, %MEM, %CPU et commande.
+Annule
+.BR \-\-newbie .
+.TP
+.B \-k, \-\-kernel
+Inclure les threads noyau.
+.TP
+.B \-K, \-\-kernel-only
+N'afficher que les threads noyau.
+.B \-k
+et
+.B \-K
+sont incompatibles.
+.TP
+.BI \-g " MOTIF" "\fR, \fP\-\-filter " MOTIF
+Ne garder que les processus dont le propriétaire, le nom de commande ou les
+arguments correspondent à l'expression régulière étendue
+.IR MOTIF ,
+telle que l'interprète le
+.B awk
+installé.
+Une expression invalide est refusée avant le début de la session.
+En mode interactif, le même filtre se modifie en direct avec
+.BR / .
+.TP
+.BI \-w " N" "\fR, \fP\-\-watch " N
+Rafraîchir toutes les
+.I N
+secondes.
+Zéro produit une seule trame statique.
+.I N
+va de 0 à 3599 ; à partir de 3599, l'affichage est immédiatement gelé.
+.TP
+.B \-H, \-\-no-header
+Masquer la ligne d'entête.
+La sortie statique n'affiche jamais d'entête.
+.TP
+.B \-F, \-\-no-footer
+Masquer la ligne de pied de page.
+La sortie statique n'affiche jamais de pied de page.
+.TP
+.B \-O, \-\-fullcmd
+Afficher la ligne de commande complète, arguments compris, au lieu du seul nom
+de commande.
+.TP
+.B \-0, \-\-no-color
+Désactiver les couleurs.
+Elles sont aussi désactivées automatiquement quand la sortie n'est pas un
+terminal ou que
+.B TERM
+vaut
+.BR dumb .
+.TP
+.B \-M, \-\-machine-cpu
+Exprimer les lignes et les totaux %CPU en pourcentage de la machine entière au
+lieu d'un cœur.
+.TP
+.B \-\-per\-core
+Exprimer les lignes et les totaux %CPU par cœur, où 100 % représente un cœur.
+C'est le défaut ; annule
+.BR \-M .
+.TP
+.B \-\-no-config
+Ne pas lire du tout le fichier de configuration.
+La session repart des valeurs par défaut.
+.TP
+.B \-\-debug
+Ne pas masquer les erreurs de
+.B ps
+et
+.BR awk .
+.TP
+.BI \-\- N
+Afficher une seule fois les
+.I N
+premiers processus, puis quitter.
+Zéro signifie tous les processus.
+.I N
+est limité à 10000.
+C'est un mode statique.
+.TP
+.B \-v, \-\-version
+Afficher la version et quitter.
+.TP
+.B \-h, \-\-help
+Afficher l'aide complète intégrée et quitter.
+.TP
+.B \-\-
+Terminer l'analyse des options.
+.SH SORTIE
+Le tableau simplifié contient PID, USER, la mémoire résidente (MiB), %CPU et la
+commande.
+Le tableau complet ajoute PPID, NI, RSS et %MEM.
+Avec
+.BR \-O ,
+la ligne de commande entière est affichée.
+.PP
+%CPU est la valeur rapportée par
+.BR ps (1)
+par rapport à un cœur, sauf si
+.B \-M
+est actif.
+.PP
+Le pied de page,
+.BR "TOTAL (displayed)" ,
+additionne la mémoire résidente des lignes affichées, leur %MEM (tableau
+complet seulement) et leur %CPU dans la même unité que les lignes, puis indique
+le nombre de processus affichés et le total.
+.PP
+En mode interactif, une ligne d'état à droite de l'entête signale le filtre
+actif, l'état de gel et la position de défilement.
+Quand l'entête est masqué, l'état s'affiche sur la dernière ligne à la place.
+.SH "MODE INTERACTIF"
+Le mode interactif est activé lorsque l'entrée et la sortie standard sont
+toutes deux des terminaux et qu'aucun
+.B \-\-N
+ni
+.B \-\-watch 0
+n'a été donné.
+Il exige au moins 60 colonnes et 6 lignes.
+.PP
+Le terminal est restauré à la sortie, y compris sur interruption ou
+terminaison.
+.SS Touches
+.TP
+.B /
+Modifier le filtre.
+Chaque frappe filtre la liste en direct ; Entrée applique, Échap annule,
+Retour arrière efface un caractère et Ctrl\-U vide la saisie.
+.TP
+.B c
+Basculer le tri par CPU.
+.TP
+.B m
+Basculer le tri par mémoire résidente.
+.TP
+.B p
+Basculer le tri par PID.
+.TP
+.B P
+Basculer le tri par PID parent.
+.TP
+.B N
+Basculer le tri par valeur nice.
+.TP
+.B u
+Basculer le tri par propriétaire.
+.TP
+.B C
+Basculer le tri par commande ; affiche aussi la ligne de commande.
+.TP
+.B t
+Basculer l'arbre des processus.
+.TP
+.B k
+Faire défiler les threads noyau : masqués, inclus, uniquement.
+.TP
+.B M
+Basculer %CPU entre par cœur et machine entière.
+.TP
+.B h
+Basculer l'entête.
+.TP
+.B f
+Basculer le pied de page.
+.TP
+.B o
+Basculer la colonne de ligne de commande.
+.TP
+.B +
+Augmenter l'intervalle de rafraîchissement d'une seconde, jusqu'à 120.
+.TP
+.B \-
+Diminuer l'intervalle de rafraîchissement d'une seconde, jusqu'à 1.
+.TP
+.B F
+Geler ou reprendre le rafraîchissement.
+.TP
+.B "Flèche gauche"
+Passer à l'affichage simplifié.
+.TP
+.B "Flèche droite"
+Passer à l'affichage complet.
+.TP
+.B "Flèche haut, flèche bas"
+Déplacer la sélection d'une ligne.
+Maintenir la touche accélère le déplacement.
+.TP
+.B Échap
+Relâcher la sélection.
+.TP
+.B "PgUp, PgDn"
+Défiler la vue d'une page.
+.TP
+.B "Home, End"
+Aller à la première ou à la dernière page.
+.TP
+.B "Entrée, d"
+Afficher les détails du processus sélectionné.
+.TP
+.B x
+Envoyer SIGTERM au processus sélectionné, après confirmation.
+.TP
+.B X
+Envoyer SIGKILL au processus sélectionné, après confirmation.
+.TP
+.B ?
+Afficher la carte complète des raccourcis en sur-impression.
+.TP
+.B q
+Quitter.
+.SS Souris
+Un clic gauche sélectionne la ligne sous le pointeur.
+Un double\-clic sur la même ligne ouvre les détails du processus.
+Maj+clic laisse la sélection de texte du terminal opérationnelle.
+.SS "Fin de processus"
+Les signaux ne sont envoyés qu'après une confirmation explicite.
+Le PID 1,
+.B psim
+lui\-même et ses propres ancêtres sont toujours refusés.
+.SH CONFIGURATION
+.B psim
+lit
+.I ~/.config/psim/default.conf
+(voir
+.B FICHIERS
+pour l'emplacement exact) au démarrage.
+Le fichier contient une paire
+.I CLÉ=VALEUR
+par ligne ; un
+.B #
+commence un commentaire.
+Il n'est jamais évalué comme du code shell.
+Les clés inconnues et les valeurs invalides sont signalées sur la sortie
+d'erreur puis ignorées.
+Les options de la ligne de commande l'emportent sur la configuration.
+.PP
+Clés reconnues :
+.TP
+.B NEWBIE
+1 pour le tableau simplifié, 0 pour le tableau complet.
+.TP
+.B INTERVAL
+Intervalle de rafraîchissement en secondes, de 0 à 3599 ; 0 signifie statique.
+.TP
+.B KERNEL
+0 (masqués), 1 (inclus) ou 2 (threads noyau uniquement).
+.TP
+.B SORT
+L'une des valeurs
+.BR pid ,
+.BR \-pid ,
+.BR ppid ,
+.BR user ,
+.BR cmd ,
+.BR rss ,
+.BR %cpu ,
+.BR %mem ,
+.BR nice ,
+ou les mêmes précédées d'un signe moins pour l'ordre décroissant.
+.TP
+.B FILTER
+Expression régulière étendue utilisée au démarrage.
+.TP
+.B SHOW_OPTS
+1 pour afficher la ligne de commande complète.
+.TP
+.B HEADER
+1 pour afficher l'entête.
+.TP
+.B FOOTER
+1 pour afficher le pied de page.
+.TP
+.B NO_COLOR
+1 pour désactiver les couleurs.
+.TP
+.B LOG
+1 pour consigner un résumé de session dans le journal (mode interactif
+seulement).
+.TP
+.B DEBUG
+1 pour conserver les erreurs de
+.B ps
+et
+.BR awk .
+.TP
+.B CPU_MODE
+1 pour un %CPU en pourcentage de la machine.
+.TP
+.B TREE
+1 pour démarrer en mode arbre.
+.TP
+.B STATS
+Clé obsolète, acceptée sans effet.
+.PP
+Exemple :
+.nf
+.ft CR
+NEWBIE=0
+INTERVAL=2
+SORT=-rss
+FILTER=firefox|telegram
+TREE=1
+.ft R
+.fi
+.SH FICHIERS
+.TP
+.I $XDG_CONFIG_HOME/psim/default.conf
+Fichier de configuration ; par défaut
+.IR ~/.config/psim/default.conf .
+.TP
+.I $XDG_CACHE_HOME/psim/log
+Journal de session ; par défaut
+.IR ~/.cache/psim/log .
+Il est renommé en
+.I log.1
+au\-delà de 256 Kio.
+Le journal n'est écrit qu'en mode interactif ; une exécution statique ne le crée
+jamais.
+.SH "VARIABLES D'ENVIRONNEMENT"
+.TP
+.B TERM
+Un terminal
+.B dumb
+désactive les couleurs et les décorations.
+.TP
+.B COLUMNS, LINES
+Servent, hors terminal, à dimensionner le tableau statique.
+Valeurs par défaut : 120x40.
+.TP
+.B XDG_CONFIG_HOME, XDG_CACHE_HOME
+Déplacent les répertoires de configuration et de cache.
+.TP
+.B PSIM_MOUSE_DEBUG
+Si la variable est définie et non vide, les événements souris décodés sont
+ajoutés à
+.I ~/.cache/psim/mouse.log
+pour le débogage.
+.SH "CODE DE RETOUR"
+.TP
+.B 0
+Fin normale.
+.TP
+.B 1
+.B ps
+ou
+.B awk
+manquant, aucun emplacement pour la configuration, ou terminal trop petit pour
+le mode interactif.
+.TP
+.B 2
+Erreur d'utilisation : option inconnue, valeur manquante ou invalide, argument
+en trop, options incompatibles, ou expression de filtre invalide.
+.TP
+.B 130, 131, 143
+Interruption par SIGINT, SIGQUIT/SIGPIPE, ou SIGTERM/SIGHUP respectivement.
+.SH EXEMPLES
+.TP
+.B psim
+Surveiller tous les processus en temps réel.
+.TP
+.B psim \-g 'firefox|telegram'
+Surveiller uniquement les processus correspondants.
+.TP
+.B psim \-\-20
+Afficher une fois les 20 processus les plus actifs, puis quitter.
+.TP
+.B psim \-K \-\-0
+Afficher tous les threads noyau et quitter.
+.TP
+.B psim \-t \-c
+Afficher l'arbre des processus, frères triés par CPU.
+.TP
+.B psim \-k | grep kworker
+Filtrer la sortie statique dans un tube.
+.SH NOTES
+Le pied de page interactif utilise un glyphe Nerd Font (U+F449) pour
+l'intervalle de rafraîchissement ; sans Nerd Font, un carré de remplacement peut
+apparaître.
+.PP
+Le mode arbre ne perd jamais de processus : les racines dont le parent est
+filtré sont affichées au premier niveau.
+.PP
+Le choix de
+.B awk
+n'influe que sur la syntaxe des expressions régulières ; gawk, mawk et busybox
+awk sont pris en charge.
+.SH "VOIR AUSSI"
+.BR ps (1),
+.BR top (1),
+.BR awk (1)
+.SH AUTEUR
+Auteur original : jotenakis.
+.SH COPYRIGHT
+GPLv3.

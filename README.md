@@ -22,7 +22,7 @@ Version 1.7.0 — GPLv3. Auteur original : jotenakis.
 - **Sortie propre** dans un pipe : `psim > liste.txt`, `psim -k | grep ssh`.
 - **Configuration** validée clé par clé (`~/.config/psim/default.conf`), jamais
   évaluée comme du shell.
-- **Souris** : clic = sélection, double-clic = détails, molette = défilement.
+- **Souris** : clic = sélection, double-clic = détails.
 - Terminal toujours restauré (trap `EXIT` + signaux), journal borné avec
   rotation.
 
@@ -37,14 +37,42 @@ Version 1.7.0 — GPLv3. Auteur original : jotenakis.
 
 ```bash
 git clone https://github.com/jotenakis2/psim.git
-install -Dm755 psim/psim ~/.local/bin/psim
-install -Dm644 psim/completions/_psim ~/.local/share/zsh/completions/_psim
+cd psim
+make install
 ```
+
+Par défaut, `make install` installe dans `~/.local` :
+
+| Élément | Destination |
+| --- | --- |
+| binaire | `~/.local/bin/psim` |
+| complétion zsh | `~/.local/share/zsh/completions/_psim` |
+| page de manuel (EN) | `~/.local/share/man/man1/psim.1` |
+| page de manuel (FR) | `~/.local/share/man/fr/man1/psim.1` |
 
 `~/.local/share/zsh/completions` doit figurer dans `$fpath` (c'est le cas de la
 configuration zsh d'Omarchy) ; un nouveau shell charge alors la complétion.
 
+Les répertoires sont configurables :
+
+```bash
+make install PREFIX=/usr/local              # installation système
+make install MANDIR=/usr/share/man          # manuels ailleurs
+make install DESTDIR=/tmp/pkg PREFIX=/usr   # empaquetage
+make uninstall                              # retrait
+make check                                  # shellcheck --enable=all
+```
+
 Sans installation, le script est autonome : `./psim`.
+
+## Documentation
+
+`man psim` après installation, ou directement depuis le dépôt :
+
+```bash
+man ./man/psim.1
+man ./man/fr/psim.1
+```
 
 ## Utilisation
 
@@ -114,7 +142,7 @@ psim -k | grep kworker      # dans un pipe
 | `?` | aide en sur-impression |
 | `q` | quitter |
 
-Clic : sélection de la ligne ; double-clic : détails ; molette : défilement.
+Clic : sélection de la ligne ; double-clic : détails.
 `Maj+clic` laisse la sélection de texte du terminal opérationnelle.
 `PID 1`, `psim` et ses propres parents sont refusés à la terminaison.
 
@@ -155,11 +183,11 @@ Les options de la ligne de commande l'emportent sur la configuration.
 ## Développement
 
 ```bash
-shellcheck-real --enable=all -x psim
+make check        # shellcheck-real --enable=all si disponible
 ```
 
-Les options de `psim` et la table de `completions/_psim` doivent rester
-cohérentes : après tout ajout ou retrait d'option, mettre les deux à jour.
+Après tout ajout, retrait ou changement d'option, mettre à jour ensemble :
+`psim`, `completions/_psim`, `man/psim.1` et `man/fr/psim.1`.
 
 ## Licence
 

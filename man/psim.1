@@ -1,0 +1,470 @@
+.\" psim(1) -- English manual page
+.\" Copyright (C) 2026 jotenakis
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH PSIM 1 "2026-11-18" "psim 1.7.0" "User Commands"
+.SH NAME
+psim \- readable process table from ps output
+.SH SYNOPSIS
+.B psim
+.RI [ OPTIONS ]
+.RI [ \-\- N ]
+.SH DESCRIPTION
+.B psim
+obtains the process list from
+.BR ps (1)
+and prints it as an aligned table with optional colours, a totals footer,
+sorting, filtering and a process tree.
+.PP
+On a terminal,
+.B psim
+runs as a refreshing monitor with keyboard and mouse shortcuts.
+When standard output or standard input is not a terminal, or when
+.B \-\-N
+or
+.BI \-\-watch " 0"
+is given, it prints a single static frame: one line per process, without ANSI
+sequences, padding or truncation, so that it composes with pipes and files like
+.BR ps .
+.PP
+By default the table uses the simplified column set
+.RB ( \-\-newbie );
+.B \-\-normal
+selects the full column set.
+Terminals narrower than 100 columns are forced to the simplified set, and the
+interactive mode refuses terminals smaller than 60x6.
+.PP
+Short options may be clustered:
+.B psim \-pn
+is
+.BR "psim \-p \-n" ,
+.B psim \-w5
+passes 5 to
+.BR \-w ,
+and
+.B psim \-gfirefox
+passes
+.I firefox
+to
+.BR \-g .
+.SH OPTIONS
+.TP
+.B \-p, \-\-pid
+Sort by PID (ascending).
+.TP
+.B \-P, \-\-ppid
+Sort by parent PID (ascending).
+.TP
+.B \-c, \-\-cpu
+Sort by CPU usage, highest first.
+.TP
+.B \-m, \-\-mem
+Sort by resident memory, largest first.
+.TP
+.B \-N, \-\-nice
+Sort by nice value (ascending).
+.TP
+.B \-u, \-\-user
+Sort by owner name (ascending).
+.TP
+.B \-C, \-\-cmd
+Sort by command name (ascending) and show the command line.
+.TP
+.B \-t, \-\-tree
+Arrange processes under their parent according to the parent PID.
+The active sort orders siblings.
+A process whose parent is not in the list starts a new root, so the result is
+a forest rather than a truncated branch.
+Indentation is applied to the command and argument columns only; PID columns do
+not move.
+.TP
+.B \-n, \-\-newbie
+Simplified display: PID, USER, resident memory in MiB, %CPU and the command.
+This is the default.
+.TP
+.B \-\-normal
+Full display: PID, PPID, USER, NI, RSS, %MEM, %CPU and the command.
+Cancels
+.BR \-\-newbie .
+.TP
+.B \-k, \-\-kernel
+Include kernel threads.
+.TP
+.B \-K, \-\-kernel-only
+Show kernel threads only.
+.B \-k
+and
+.B \-K
+are mutually exclusive.
+.TP
+.BI \-g " PATTERN" "\fR, \fP\-\-filter " PATTERN
+Keep only processes whose owner, command name or arguments match the extended
+regular expression
+.IR PATTERN ,
+as understood by the installed
+.BR awk .
+An invalid expression is rejected before the session starts.
+In the interactive mode the same filter can be edited live with
+.BR / .
+.TP
+.BI \-w " N" "\fR, \fP\-\-watch " N
+Refresh every
+.I N
+seconds.
+Zero means a single static frame.
+.I N
+ranges from 0 to 3599; values at or above 3599 freeze the display immediately.
+.TP
+.B \-H, \-\-no-header
+Hide the header line.
+Static output never prints a header.
+.TP
+.B \-F, \-\-no-footer
+Hide the footer line.
+Static output never prints a footer.
+.TP
+.B \-O, \-\-fullcmd
+Show the full command line, with arguments, instead of the command name alone.
+.TP
+.B \-0, \-\-no-color
+Disable colours.
+Colours are also disabled automatically when the output is not a terminal or
+.B TERM
+is
+.BR dumb .
+.TP
+.B \-M, \-\-machine-cpu
+Express %CPU rows and totals as a percentage of the whole machine instead of
+one core.
+.TP
+.B \-\-per\-core
+Express %CPU rows and totals per core, where 100% is one core.
+This is the default and cancels
+.BR \-M .
+.TP
+.B \-\-no-config
+Do not read the configuration file at all.
+The session starts from the built\-in defaults.
+.TP
+.B \-\-debug
+Do not hide errors from
+.B ps
+and
+.BR awk .
+.TP
+.BI \-\- N
+Print the first
+.I N
+processes once, then exit.
+Zero means all processes.
+.I N
+is limited to 10000.
+This is a static mode.
+.TP
+.B \-v, \-\-version
+Print the version and exit.
+.TP
+.B \-h, \-\-help
+Print the complete built\-in help and exit.
+.TP
+.B \-\-
+End option parsing.
+.SH OUTPUT
+The simplified table contains PID, USER, resident memory (MiB), %CPU and the
+command.
+The full table adds PPID, NI, RSS and %MEM.
+With
+.BR \-O ,
+the whole command line is shown.
+.PP
+%CPU is the value reported by
+.BR ps (1)
+relative to one core, unless
+.B \-M
+is active.
+.PP
+The footer,
+.BR "TOTAL (displayed)" ,
+sums the resident memory of the displayed rows, their %MEM (full table only)
+and their %CPU in the same unit as the rows, followed by the displayed and total
+process counts.
+.PP
+In interactive mode, a status line to the right of the header reports the
+active filter, freeze state and scroll position.
+When the header is hidden, the status is printed on the last line instead.
+.SH "INTERACTIVE MODE"
+Interactive mode is entered when both standard input and standard output are
+terminals and neither
+.B \-\-N
+nor
+.B \-\-watch 0
+was given.
+It requires at least 60 columns and 6 lines.
+.PP
+The terminal is restored on exit, including on interrupt or termination.
+.SS Keys
+.TP
+.B /
+Edit the filter.
+Each keystroke filters the list live; Enter applies, Escape cancels,
+Backspace deletes a character and Ctrl\-U clears the input.
+.TP
+.B c
+Toggle sorting by CPU.
+.TP
+.B m
+Toggle sorting by resident memory.
+.TP
+.B p
+Toggle sorting by PID.
+.TP
+.B P
+Toggle sorting by parent PID.
+.TP
+.B N
+Toggle sorting by nice value.
+.TP
+.B u
+Toggle sorting by owner.
+.TP
+.B C
+Toggle sorting by command; also shows the command line.
+.TP
+.B t
+Toggle the process tree.
+.TP
+.B k
+Cycle kernel threads: hidden, included, kernel threads only.
+.TP
+.B M
+Toggle %CPU between per core and whole machine.
+.TP
+.B h
+Toggle the header.
+.TP
+.B f
+Toggle the footer.
+.TP
+.B o
+Toggle the command line column.
+.TP
+.B +
+Increase the refresh interval by one second, up to 120.
+.TP
+.B \-
+Decrease the refresh interval by one second, down to 1.
+.TP
+.B F
+Freeze or resume refreshing.
+.TP
+.B "Left arrow"
+Switch to the simplified display.
+.TP
+.B "Right arrow"
+Switch to the full display.
+.TP
+.B "Up arrow, Down arrow"
+Move the selection by one row.
+Holding the key accelerates the movement.
+.TP
+.B Escape
+Release the selection.
+.TP
+.B "PgUp, PgDn"
+Scroll the view by one page.
+.TP
+.B "Home, End"
+Jump to the first or last page.
+.TP
+.B "Enter, d"
+Show details for the selected process.
+.TP
+.B x
+Send SIGTERM to the selected process, after confirmation.
+.TP
+.B X
+Send SIGKILL to the selected process, after confirmation.
+.TP
+.B ?
+Show the complete key map as an overlay.
+.TP
+.B q
+Quit.
+.SS Mouse
+A left click selects the row under the pointer.
+A double click on the same row opens the process details.
+Shift+click keeps the terminal's own text selection available.
+.SS "Process termination"
+Signals are sent only after an explicit confirmation.
+PID 1,
+.B psim
+itself and its own ancestors are always refused.
+.SH CONFIGURATION
+.B psim
+reads
+.I ~/.config/psim/default.conf
+(see
+.B FILES
+for the exact location) at startup.
+The file contains one
+.I KEY=VALUE
+pair per line; a
+.B #
+starts a comment.
+It is never evaluated as shell code.
+Unknown keys and invalid values are reported on standard error and ignored.
+Command\-line options override the configuration.
+.PP
+Recognised keys:
+.TP
+.B NEWBIE
+1 for the simplified table, 0 for the full table.
+.TP
+.B INTERVAL
+Refresh interval in seconds, 0 to 3599; 0 means static.
+.TP
+.B KERNEL
+0 (hidden), 1 (included) or 2 (kernel threads only).
+.TP
+.B SORT
+One of
+.BR pid ,
+.BR \-pid ,
+.BR ppid ,
+.BR user ,
+.BR cmd ,
+.BR rss ,
+.BR %cpu ,
+.BR %mem ,
+.BR nice ,
+or the same names prefixed with a minus sign for descending order.
+.TP
+.B FILTER
+Extended regular expression used at startup.
+.TP
+.B SHOW_OPTS
+1 to show the full command line.
+.TP
+.B HEADER
+1 to show the header.
+.TP
+.B FOOTER
+1 to show the footer.
+.TP
+.B NO_COLOR
+1 to disable colours.
+.TP
+.B LOG
+1 to append a session summary to the log (interactive mode only).
+.TP
+.B DEBUG
+1 to keep errors from
+.B ps
+and
+.BR awk .
+.TP
+.B CPU_MODE
+1 for whole\-machine %CPU.
+.TP
+.B TREE
+1 to start in tree mode.
+.TP
+.B STATS
+Obsolete key, accepted without effect.
+.PP
+Example:
+.nf
+.ft CR
+NEWBIE=0
+INTERVAL=2
+SORT=-rss
+FILTER=firefox|telegram
+TREE=1
+.ft R
+.fi
+.SH FILES
+.TP
+.I $XDG_CONFIG_HOME/psim/default.conf
+Configuration file; defaults to
+.IR ~/.config/psim/default.conf .
+.TP
+.I $XDG_CACHE_HOME/psim/log
+Session log; defaults to
+.IR ~/.cache/psim/log .
+It is rotated to
+.I log.1
+beyond 256 KiB.
+The log is written in interactive mode only; static runs never create it.
+.SH ENVIRONMENT
+.TP
+.B TERM
+A
+.B dumb
+terminal disables colours and decorations.
+.TP
+.B COLUMNS, LINES
+Used, when not attached to a terminal, to lay out the static table.
+Defaults to 120x40.
+.TP
+.B XDG_CONFIG_HOME, XDG_CACHE_HOME
+Relocate the configuration and cache directories.
+.TP
+.B PSIM_MOUSE_DEBUG
+When set and non\-empty, append decoded mouse events to
+.I ~/.cache/psim/mouse.log
+for debugging.
+.SH "EXIT STATUS"
+.TP
+.B 0
+Normal termination.
+.TP
+.B 1
+Missing
+.B ps
+or
+.BR awk ,
+no location for the configuration, or terminal too small for interactive mode.
+.TP
+.B 2
+Usage error: unknown option, missing or invalid value, extra argument,
+incompatible options, or invalid filter expression.
+.TP
+.B 130, 131, 143
+Interrupted by SIGINT, SIGQUIT/SIGPIPE, or SIGTERM/SIGHUP respectively.
+.SH EXAMPLES
+.TP
+.B psim
+Monitor all processes in real time.
+.TP
+.B psim \-g 'firefox|telegram'
+Monitor matching processes only.
+.TP
+.B psim \-\-20
+Print the 20 busiest processes once, then exit.
+.TP
+.B psim \-K \-\-0
+Print all kernel threads and exit.
+.TP
+.B psim \-t \-c
+Show the process tree, siblings ordered by CPU.
+.TP
+.B psim \-k | grep kworker
+Filter the static output in a pipe.
+.SH NOTES
+The interactive footer uses one Nerd Font glyph (U+F449) for the refresh
+interval; without a Nerd Font, a placeholder box may appear.
+.PP
+Tree mode never drops a process: roots whose parent is filtered out are shown
+at the top level.
+.PP
+The choice of
+.B awk
+matters only for regular expression syntax; gawk, mawk and busybox awk are
+supported.
+.SH "SEE ALSO"
+.BR ps (1),
+.BR top (1),
+.BR awk (1)
+.SH AUTHOR
+Original author: jotenakis.
+.SH COPYRIGHT
+GPLv3.
