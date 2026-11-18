@@ -1,0 +1,2386 @@
+#!/usr/bin/env bash
+# shellcheck enable=all
+##############################################################################
+# psim — mise en forme lisible de la sortie de ps.
+#
+# Auteur original : jotenakis (GPLv3). Réécriture corrective 2026.
+#
+# Différences avec psim (0.999) :
+#   * utilisable dans un pipe/un fichier (plus de COLUMNS non lié, plus de
+#     séquences ANSI, sortie non tronquée, une ligne par processus) ;
+#   * plus aucun plantage sur un filtre sans correspondance ou invalide ;
+#   * terminal toujours restauré (trap EXIT + signaux) ;
+#   * une seule invocation de ps par rafraîchissement (total exact inclus) ;
+#   * %CPU réel (l'ancienne version divisait par le nombre de cœurs) ;
+#   * troncature/alignement corrects (plus de lignes de 194 colonnes) ;
+#   * configuration validée clé par clé (plus d'évaluation de shell) ;
+#   * options --no-header/--no-footer indépendantes (le statut suit l'entête :
+#     il s'affiche à sa droite, ou sur une ligne en bas si l'entête est masqué) ;
+#   * mode arbre (--tree / touche t) : hiérarchie des ppid, l'indentation
+#     se prend sur les colonnes de commande et d'arguments ;
+#   * souris en mode dynamique : clic = sélection de la ligne, double-clic =
+#     détails du processus, molette = défilement de la vue ;
+#   * journal borné (rotation) ;
+#   * options inconnues, arguments en trop et valeurs invalides refusés.
+#
+# Dépendances : ps (procps-ng), awk (gawk, mawk ou busybox awk).
+#               tput est optionnel.
+##############################################################################
+set -euo pipefail
+
+readonly VER="1.7.0"
+readonly NAME="${0##*/}"
+readonly CONF_NAME="psim"       # config et cache : ~/.config/psim et ~/.cache/psim
+readonly SELF_PID="${BASHPID:-$$}"
+
+# Seuils
+readonly THIN_W=100        # en dessous : mode simplifié forcé
+readonly MIN_W=60          # en dessous : refus du mode dynamique
+readonly MIN_H=6
+readonly INTERVAL_MAX=3599 # au-delà : gel
+readonly LOG_MAX=262144    # rotation du journal (octets)
+
+# Glyphe Nerd Font du statut (horloge de l'intervalle)
+readonly ICON_CLOCK=$'\uF449'
+
+# État
+declare -i WIDTH=120 HEIGHT=40
+declare -i LIMIT=0 OFFSET=0 TOTAL=0
+declare -i ALT=0 SESSION=0 CLEANED=0 TTY=0 STDIN_TTY=0 SIZE_KNOWN=0 WINCH=0
+# Dernier événement souris (MOUSE_BTN < 0 : aucun) : bouton, ligne du curseur,
+# relâchement. Renseignés par MOUSE_READ, exploités par MOUSE_ACT. La colonne
+# n'est pas conservée : seule la ligne porte la sélection.
+declare -i MOUSE_BTN=-1 MOUSE_Y=0 MOUSE_REL=0
+# Double-clic : instant (µs) et ligne du dernier appui gauche, et drapeau posé
+# par MOUSE_ACT quand deux appuis tombent sur la même ligne dans l'intervalle.
+declare -i CLICK_LAST=0 CLICK_ROW=0 DOUBLE=0
+declare -i REDRAW=0               # l'événement souris a-t-il changé quelque chose ?
+declare -i CLICK_US=400000        # 400 ms : la tolérance usuelle d'un double-clic
+# Molette : neutralisée sur demande (les événements sont quand même drainés, le
+# terminal n'a pas d'autre usage). WHEEL=1 rend le défilement de la vue.
+declare -i WHEEL=0 WHEEL_STEP=3
+declare -i NOWTIC=0               # horodatage courant (µs), posé par NOW_US
+# Flèches maintenues : la répétition rapprochée accélère le déplacement
+# (1, 1, 2, 2, 3, 3, 4… jusqu'à SEL_FAST lignes par appui). Un appui isolé reste
+# exactement d'une ligne, et le pas retombe dès que la frappe ralentit.
+declare -i SEL_LAST=0 SEL_REP=0 SEL_FAST=4
+declare -i REPEAT_US=250000       # au-delà de 250 ms entre deux appuis : on repart à 1
+declare -i STATUSW=0
+status_p=''
+status_c=''
+declare -i FILTER_EDIT=0 FILTER_INVALID=0
+declare -i NEWBIE=1 INTERVAL=1 HEADER=1 FOOTER=1 NO_COLOR=0
+declare -i KERNEL=0 STATIC=1 SHOW_OPTS=0 FREEZE=0 LOG=1 DEBUG=0 CPU_MODE=0
+# NO_CONFIG=1 : le fichier de configuration n'est pas lu du tout (--no-config).
+# Le drapeau est posé avant LOAD_CONFIG, voir MAIN.
+declare -i NO_CONFIG=0
+# TREE=1 : mode arbre (hiérarchie ppid), calculé par awk en fin de flux
+declare -i TREE=0
+# Sélection : SEL_PID est la vérité (elle suit le processus d'une trame à
+# l'autre) ; SELROW/SELABS sont renseignés par awk (rang dans la fenêtre et rang
+# absolu), ROWPIDS porte les PID de la fenêtre courante pour les déplacements.
+declare -i SEL_PID=0 SELROW=0 SELABS=0 SELIDX=0 SELMOVED=0
+declare -a ROWPIDS=()
+# Boîtes (détails, confirmation de kill) : lignes déjà rendues, leur largeur
+# visible, la géométrie, le décor et le titre courant
+declare -a DET_ROWS=() DET_W=()
+declare -i DET_INNER=0 DET_FREEZE_SAVE=0
+declare SIZE_STR='' AGE_STR='' DET_NAME='?'
+declare DET_GRIS='' DET_RST='' DET_HZ='' DET_BV='' DET_TL='' DET_TR='' DET_BL='' DET_BR=''
+declare DET_BG='' DET_RS='' DET_HINT=''
+# Terminer un processus : nom visé et résultats des helpers (drapeaux, jamais
+# un code de retour de fonction testé dans une condition)
+declare CMDNAME='?'
+declare -i ISANC=0 ASKED=0 KILL_OK=0
+declare SORT="-%cpu"
+declare FILTER="" FILTER_BUF="" FILTER_SAVE=""
+declare -i NCPU=1
+declare PS_BIN="" AWK_BIN="" CONFIG="" CACHE_DIR="" DRAW_FILE="" LOG_FILE="" ME=""
+declare STTY_SAVE=""
+declare -a CLUSTER_ARGS=()
+
+# Couleurs (remplies par DEFINE_COLORS)
+Rouge="" Vert="" Jaune="" Bleu="" BleuBold="" Magenta="" Cyan="" Blanc=""
+RougeBold="" Gris="" BgGris="" Reset="" ResetFg="" Underline="" Gras=""
+
+##############################################################################
+# Utilitaires
+##############################################################################
+ERR() { printf '%sErreur%s : %s\n' "${RougeBold}" "${Reset}" "$*" >&2; }
+WARN() { printf '%sAttention%s : %s\n' "${Jaune}" "${Reset}" "$*" >&2; }
+
+RESTORE_SCREEN() {
+    if (( ALT == 1 )); then
+        if [[ -n "${STTY_SAVE}" ]]; then
+            stty "${STTY_SAVE}" 2>/dev/null || true
+        fi
+        printf '\033[?1000l\033[?1006l\033[?25h\033[?1049l\033[0m'
+        ALT=0
+    fi
+    return 0
+}
+
+QUIT() { exit "${1:-0}"; }
+
+DEFINE_COLORS() {
+    if (( NO_COLOR == 1 )) || (( TTY == 0 )) || [[ "${TERM:-dumb}" == "dumb" ]]; then
+        Rouge="" Vert="" Jaune="" Bleu="" BleuBold="" Magenta="" Cyan="" Blanc=""
+        RougeBold="" Gris="" BgGris="" Reset="" ResetFg="" Underline="" Gras=""
+    else
+        Rouge=$'\033[31m' ; Vert=$'\033[32m' ; Jaune=$'\033[33m'
+        Bleu=$'\033[34m'  ; BleuBold=$'\033[1;34m' ; Magenta=$'\033[35m'
+        Cyan=$'\033[36m'  ; Blanc=$'\033[37m' ; RougeBold=$'\033[1;31m'
+        Gris=$'\033[37m'  ; BgGris=$'\033[100m'
+        Reset=$'\033[0m'  ; ResetFg=$'\033[39m' ; Underline=$'\033[4m'
+        Gras=$'\033[1m'
+    fi
+    return 0
+}
+
+##############################################################################
+# Configuration (parsing strict, aucune évaluation de shell)
+##############################################################################
+CONFIG_DEFAULTS() {
+    NEWBIE=1
+    INTERVAL=1
+    HEADER=1
+    FOOTER=1
+    NO_COLOR=0
+    KERNEL=0
+    SHOW_OPTS=0
+    SORT="-%cpu"
+    FILTER=""
+    LOG=1
+    DEBUG=0
+    CPU_MODE=0
+    STATIC=0
+    TREE=0
+    return 0
+}
+
+SET_BOOL() {  # SET_BOOL NOM VALEUR NUMÉRO_DE_LIGNE
+    local name="$1" val="$2"
+    local -i line="$3"
+    case "${val}" in
+        0|1) printf -v "${name}" '%s' "${val}" ;;
+        *)   WARN "${CONFIG}:${line}: ${name} doit valoir 0 ou 1 (ligne ignorée)"; return 1 ;;
+    esac
+    return 0
+}
+
+LOAD_CONFIG() {
+    local line key val
+    local -i n=0 bad=0
+
+    [[ -f "${CONFIG}" ]] || return 0
+    if [[ ! -r "${CONFIG}" ]]; then
+        WARN "${CONFIG} illisible : configuration ignorée"
+        return 0
+    fi
+
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        n=$((n + 1))
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "${line}" ]] && continue
+
+        if [[ ! "${line}" =~ ^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+            WARN "${CONFIG}:${n}: ligne ignorée (format attendu CLÉ=VALEUR)"
+            bad=$((bad + 1))
+            continue
+        fi
+        key="${BASH_REMATCH[1]}"
+        val="${BASH_REMATCH[2]}"
+        val="${val%\"}" ; val="${val#\"}"
+        val="${val%\'}" ; val="${val#\'}"
+
+        case "${key}" in
+            NEWBIE|HEADER|FOOTER|NO_COLOR|SHOW_OPTS|LOG|DEBUG|CPU_MODE|TREE)
+                # volontaire : une valeur invalide est comptée et le chargement continue
+                # shellcheck disable=SC2310
+                SET_BOOL "${key}" "${val}" "${n}" || bad=$((bad + 1))
+                ;;
+            INTERVAL)
+                if [[ "${val}" =~ ^[0-9]+$ ]] && (( 10#${val} <= INTERVAL_MAX )); then
+                    INTERVAL=$((10#${val}))
+                    (( INTERVAL == 0 )) && STATIC=1
+                    (( INTERVAL >= INTERVAL_MAX )) && FREEZE=1
+                else
+                    WARN "${CONFIG}:${n}: INTERVAL attend un entier 0..${INTERVAL_MAX} (ignoré)"
+                    bad=$((bad + 1))
+                fi
+                ;;
+            KERNEL)
+                if [[ "${val}" =~ ^[0-2]$ ]]; then
+                    KERNEL="${val}"
+                else
+                    WARN "${CONFIG}:${n}: KERNEL doit valoir 0, 1 ou 2 (ignoré)"
+                    bad=$((bad + 1))
+                fi
+                ;;
+            SORT)
+                case "${val}" in
+                    pid|-pid|ppid|-ppid|user|-user|cmd|-cmd|rss|-rss|%cpu|-%cpu|%mem|-%mem|nice|-nice)
+                        SORT="${val}" ;;
+                    *) WARN "${CONFIG}:${n}: tri « ${val} » inconnu (ignoré)"; bad=$((bad + 1)) ;;
+                esac
+                ;;
+            STATS) : ;;   # ancienne clé, sans effet
+            FILTER) FILTER="${val}" ;;
+            *)
+                WARN "${CONFIG}:${n}: clé inconnue « ${key} » (ignorée)"
+                bad=$((bad + 1))
+                ;;
+        esac
+    done < "${CONFIG}"
+
+    (( bad == 0 )) || WARN "${bad} ligne(s) de ${CONFIG} ignorée(s)"
+    return 0
+}
+
+##############################################################################
+# Aide / arguments
+##############################################################################
+VERSION() { printf 'version %s%s%s — %s\n' "${Jaune}" "${VER}" "${Reset}" "${NAME}"; return 0; }
+
+USAGE() {
+    cat <<EOF
+${Vert}USAGE${Reset}
+   ${Jaune}${NAME}${Reset} [OPTIONS] [--N]
+
+${Vert}OPTIONS${Reset}
+   ${Bleu}-p, --pid${Reset}              tri par PID
+   ${Bleu}-P, --ppid${Reset}             tri par PPID
+   ${Bleu}-m, --mem${Reset}              tri par mémoire résidente
+   ${Bleu}-c, --cpu${Reset}              tri par %CPU
+   ${Bleu}-N, --nice${Reset}             tri par valeur nice (NI)
+   ${Bleu}-u, --user${Reset}             tri par propriétaire
+   ${Bleu}-C, --cmd${Reset}              tri par commande
+   ${Bleu}-t, --tree${Reset}             hiérarchie des processus (arbre des ppid)
+   ${Bleu}-n, --newbie${Reset}           affichage simplifié (PID USER MiB %CPU CMD)
+   ${Bleu}    --normal${Reset}           colonnes complètes (annule --newbie)
+   ${Bleu}-k, --kernel${Reset}           inclure les threads noyau
+   ${Bleu}-K, --kernel-only${Reset}      uniquement les threads noyau
+   ${Bleu}-g, --filter MOTIF${Reset}     filtre ERE (utilisateur + commande + arguments)
+   ${Bleu}-w, --watch N${Reset}          rafraîchir toutes les N s (0 = statique)
+   ${Bleu}-H, --no-header${Reset}        masquer l'entête
+   ${Bleu}-F, --no-footer${Reset}        masquer le pied de page
+   ${Bleu}-O, --fullcmd${Reset}          chemin complet et arguments
+   ${Bleu}-0, --no-color${Reset}         sans couleurs
+   ${Bleu}-M, --machine-cpu${Reset}      %CPU des lignes en % de la machine (défaut : par cœur)
+   ${Bleu}    --per-core${Reset}         %CPU des lignes par cœur (défaut)
+   ${Bleu}    --no-config${Reset}        ignorer le fichier de configuration
+   ${Bleu}    --debug${Reset}            ne pas masquer les erreurs ps/awk
+   ${Bleu}    --N${Reset}                N premiers processus, une seule fois (N=0 : tout)
+   ${Bleu}-v, --version${Reset}          version
+   ${Bleu}-h, --help${Reset}             cette aide
+EOF
+    return 0
+}
+
+HELP() {
+    VERSION
+    USAGE
+    cat <<EOF
+
+${Vert}DESCRIPTION${Reset}
+   ${Jaune}${NAME}${Reset} met en forme la sortie de ${Jaune}ps${Reset} : couleurs, colonnes alignées,
+   totaux, tri, filtre. Deux modes :
+     • ${Bleu}dynamique${Reset} : rafraîchissement permanent + raccourcis (défaut sur un terminal) ;
+     • ${Bleu}statique${Reset}  : un seul affichage (--N, --watch 0, ou sortie redirigée).
+
+${Vert}PIED DE PAGE${Reset}
+   ${Jaune}TOTAL (displayed)${Reset} cumule les lignes affichées : RSS sous ${Jaune}MiB${Reset}, %MEM sous ${Jaune}%MEM${Reset},
+   et ${Jaune}%CPU${Reset} dans la ${Jaune}même unité que les lignes${Reset} : par défaut 100 % = 1 cœur,
+   ou en % de la machine après la touche ${Jaune}M${Reset} / ${Jaune}--machine-cpu${Reset}
+   (colonne alors intitulée ${Jaune}%CPU/m${Reset}, comportement de ${Jaune}psim${Reset}).
+
+${Vert}RACCOURCIS (dynamique)${Reset}
+   /  filtre     Enter valider  Échap annuler     Ctrl-U effacer
+   c/m/p/P/N/u/C tri            o  options        M  %CPU machine
+   t  arbre     k  noyau
+   h  entête     f  pied        ?  aide         q  quitter
+   +/-  délai    F  gel/dégel   ←/→  newbie/étendu
+   ↑/↓  sélectionner (la vue suit aux bords ; maintenir la flèche accélère)
+         Échap  relâcher
+   clic  sélectionner la ligne   double-clic : détails du processus
+         (Maj+clic : la sélection de texte du terminal reste possible)
+   Entrée / d  détails du processus sélectionné (une touche ferme la boîte,
+   x / X y terminent le processus, après la même confirmation que dans la liste)
+   PgUp/PgDn  défiler d'une page   Home/End  début / fin de liste
+   x  TERM  et  X  KILL  sur le processus sélectionné, après confirmation (y).
+   PID 1, psim et ses propres parents sont refusés.
+   ?  aide en sur-impression : la liste complète des raccourcis. Le statut
+      (filtre, gel, défilement) s'affiche à droite de l'entête dès qu'il y a
+      quelque chose à dire, ou sur une ligne en bas si l'entête est masquée.
+
+${Vert}FILTRE INTERACTIF${Reset}
+   ${Jaune}/${Reset} ouvre la saisie : le motif se construit caractère par caractère et la liste
+   se filtre en direct (Entrée valide, Échap annule, Backspace efface, Ctrl-U vide).
+   Un motif invalide vide la liste et affiche ${RougeBold}invalide${Reset} dans le statut.
+
+${Vert}ARBRE${Reset}
+   ${Jaune}t${Reset} (ou ${Jaune}--tree${Reset}) range chaque processus sous son parent ; l'ordre du tri
+   actif devient l'ordre des frères. Un processus dont le parent est absent de la
+   liste (filtré, ou sorti de ps) passe à la racine : on obtient une forêt, jamais
+   une branche coupée. L'indentation se prend sur les colonnes de la commande et
+   des arguments, pas sur le reste du tableau ; les PID, eux, ne bougent pas.
+
+${Vert}PIPE / REDIRECTION${Reset}
+   Sans terminal, ${Jaune}${NAME}${Reset} passe en statique, sans couleur ni échappement,
+   sans troncature ni padding : ${Jaune}${NAME} > liste.txt${Reset}, ${Jaune}${NAME} | grep ssh${Reset},
+   ${Jaune}${NAME} -k | wc -l${Reset} se comportent comme avec ${Jaune}ps${Reset}.
+
+${Vert}CONFIGURATION${Reset}
+   ${Bleu}${CONFIG}${Reset} — une clé par ligne, ${Jaune}CLÉ=VALEUR${Reset}.
+   Clés : NEWBIE INTERVAL KERNEL SORT FILTER SHOW_OPTS HEADER FOOTER
+          NO_COLOR LOG DEBUG CPU_MODE TREE (STATS : ancienne clé, sans effet)
+   Le fichier n'est jamais interprété comme du shell ; les clés inconnues
+   sont signalées puis ignorées. ${Jaune}--no-config${Reset} ne le lit pas du tout : la
+   session repart des valeurs par défaut (utile quand la configuration
+   impose TREE=1 ou INTERVAL=0 et qu'on veut l'affichage brut).
+
+${Vert}EXEMPLES${Reset}
+   ${Jaune}${NAME}${Reset}                       moniteur temps réel
+   ${Jaune}${NAME} -g 'firefox|telegram'${Reset}  filtrer (ERE du awk installé)
+   ${Jaune}${NAME} --20${Reset}                  20 premiers processus
+   ${Jaune}${NAME} -K --0${Reset}                threads noyau uniquement
+   ${Jaune}${NAME} -k | grep kworker${Reset}     dans un pipe
+
+${Vert}FICHIERS${Reset}
+   ${Bleu}${CONFIG}${Reset}              configuration
+   ${Bleu}${CACHE_DIR:-~/.cache/${CONF_NAME}}/log${Reset}   journal (LOG=1, rotation à 256 Kio)
+
+${Vert}LICENCE${Reset}
+   GPLv3 — auteur original jotenakis.
+EOF
+    return 0
+}
+
+# Éclate une option courte groupée : -pn -> -p -n, -w5 -> -w 5, -ngfirefox -> -n -g firefox
+EXPAND_CLUSTER() {
+    local rest="${1#-}" c
+    CLUSTER_ARGS=()
+    while [[ -n "${rest}" ]]; do
+        c="${rest:0:1}"
+        rest="${rest:1}"
+        case "${c}" in
+            w|g)
+                if [[ -n "${rest}" ]]; then
+                    CLUSTER_ARGS+=("-${c}" "${rest}")
+                    rest=""
+                else
+                    CLUSTER_ARGS+=("-${c}")
+                fi
+                ;;
+            *)
+                CLUSTER_ARGS+=("-${c}")
+                ;;
+        esac
+    done
+    return 0
+}
+
+NEED_ARG() {
+    [[ -n "${2}" ]] && return 0
+    ERR "l'option ${1} attend un argument."
+    QUIT 2
+}
+
+# --no-config doit être connu AVANT la lecture du fichier : un test posé dans
+# PARSE_ARGS arriverait trop tard (la config a déjà imposé TREE=1, INTERVAL=0,
+# SORT, FILTER…). Ce balayage tourne donc entre CONFIG_DEFAULTS et LOAD_CONFIG.
+# Il s'arrête sur --, qui termine les options.
+SCAN_NO_CONFIG() {
+    local arg
+    for arg in "$@"; do
+        case "${arg}" in
+            --) return 0 ;;
+            --no-config) NO_CONFIG=1; return 0 ;;
+            *) : ;;
+        esac
+    done
+    return 0
+}
+
+PARSE_ARGS() {
+    local arg
+    local -i k=0 konly=0
+
+    while (( $# > 0 )); do
+        arg="$1"
+        case "${arg}" in
+            --) shift; break ;;
+            -p|--pid)   SORT="pid";   shift ;;
+            -P|--ppid)  SORT="ppid";  shift ;;
+            -c|--cpu)   SORT="-%cpu"; shift ;;
+            -N|--nice)  SORT="nice";   shift ;;
+            -m|--mem)   SORT="-rss";  shift ;;
+            -u|--user)  SORT="user";  shift ;;
+            -C|--cmd)   SORT="cmd";   shift ;;
+            -t|--tree) TREE=1; shift ;;
+            -n|--newbie) NEWBIE=1; shift ;;
+            --normal) NEWBIE=0; shift ;;
+            -k|--kernel) k=1; shift ;;
+            -K|--kernel-only) konly=1; shift ;;
+            -H|--no-header) HEADER=0; shift ;;
+            -F|--no-footer) FOOTER=0; shift ;;
+            -O|--fullcmd) SHOW_OPTS=1; shift ;;
+            -0|--no-color) NO_COLOR=1; shift ;;
+            -M|--machine-cpu) CPU_MODE=1; shift ;;
+            --per-core) CPU_MODE=0; shift ;;
+            --no-config) NO_CONFIG=1; shift ;;
+            --debug) DEBUG=1; shift ;;
+            -h|--help) HELP; QUIT 0 ;;
+            -v|--version) VERSION; QUIT 0 ;;
+            -w|--watch)
+                NEED_ARG "${arg}" "${2:-}"
+                # ${#2} : un entier de 19 chiffres déborde en négatif et
+                # passerait le test, pour finir en « sleep: invalid option »
+                if [[ ! "${2}" =~ ^[0-9]+$ ]] || (( ${#2} > 4 )) || (( 10#${2} > INTERVAL_MAX )); then
+                    ERR "${arg} attend un entier entre 0 et ${INTERVAL_MAX}."
+                    QUIT 2
+                fi
+                INTERVAL=$((10#${2}))
+                (( INTERVAL == 0 )) && STATIC=1
+                (( INTERVAL && LIMIT == 0 )) && STATIC=0          # -w N écrase un INTERVAL=0 de la config
+                (( INTERVAL >= INTERVAL_MAX )) && FREEZE=1
+                shift 2
+                ;;
+            -g|--filter)
+                NEED_ARG "${arg}" "${2:-}"
+                FILTER="$2"
+                shift 2
+                ;;
+            --*)
+                if [[ "${arg}" == --filter=* || "${arg}" == --watch=* ]]; then
+                    shift
+                    set -- "${arg%%=*}" "${arg#*=}" "$@"
+                    continue
+                fi
+                if [[ "${arg}" =~ ^--([0-9]+)$ ]]; then
+                    if (( ${#BASH_REMATCH[1]} > 6 )) || (( 10#${BASH_REMATCH[1]} > 10000 )); then
+                        ERR "--N trop grand (maximum 10000)."
+                        QUIT 2
+                    fi
+                    LIMIT=$((10#${BASH_REMATCH[1]}))
+                    STATIC=1
+                    shift
+                else
+                    ERR "option inconnue : ${arg}"
+                    USAGE >&2
+                    QUIT 2
+                fi
+                ;;
+            -*)
+                if [[ "${arg}" =~ ^-[A-Za-z0-9]{2,}$ ]]; then
+                    EXPAND_CLUSTER "${arg}"
+                    shift
+                    set -- "${CLUSTER_ARGS[@]}" "$@"
+                    continue
+                fi
+                ERR "option inconnue : ${arg}"
+                USAGE >&2
+                QUIT 2
+                ;;
+            *)
+                ERR "argument inattendu : ${arg}"
+                QUIT 2
+                ;;
+        esac
+    done
+
+    if (( $# > 0 )); then
+        ERR "argument inattendu : $1"
+        QUIT 2
+    fi
+
+    if (( k == 1 && konly == 1 )); then
+        ERR "--kernel et --kernel-only sont incompatibles."
+        QUIT 2
+    fi
+    (( konly == 1 )) && KERNEL=2
+    (( k == 1 )) && KERNEL=1
+
+    [[ "${SORT}" == "cmd" ]] && SHOW_OPTS=1
+    [[ -n "${FILTER}" ]] && SHOW_OPTS=1
+
+    # pas de terminal (sortie OU entrée) : mode statique, sans couleurs ni décor
+    if (( TTY == 0 || STDIN_TTY == 0 )); then
+        NO_COLOR=1
+        STATIC=1
+        HEADER=0
+        FOOTER=0
+    fi
+    # mode statique : lignes seules, comme ps
+    if (( STATIC == 1 )); then
+        HEADER=0
+        FOOTER=0
+    fi
+    return 0
+}
+
+##############################################################################
+# Environnement
+##############################################################################
+INIT_PATHS() {
+    local cfg_home cache_home
+    # set -u ferait mourir bash sur « HOME: unbound variable », sans diagnostic
+    if [[ -z "${HOME:-}" && -z "${XDG_CONFIG_HOME:-}" && -z "${XDG_CACHE_HOME:-}" ]]; then
+        ERR "ni HOME ni XDG_CONFIG_HOME/XDG_CACHE_HOME : impossible de situer la configuration."
+        return 1
+    fi
+    cfg_home="${XDG_CONFIG_HOME:-${HOME:-}/.config}"
+    cache_home="${XDG_CACHE_HOME:-${HOME:-}/.cache}"
+    CONFIG="${cfg_home}/${CONF_NAME}/default.conf"
+    if [[ ! -f "${CONFIG}" && -f "${cfg_home}/psim/default.conf" ]]; then
+        CONFIG="${cfg_home}/psim/default.conf"   # reprise de l'ancienne config
+    fi
+    CACHE_DIR="${cache_home}/${CONF_NAME}"
+    DRAW_FILE="${CACHE_DIR}/drawn.${SELF_PID}"
+    LOG_FILE="${CACHE_DIR}/log"
+    return 0
+}
+
+CHECK_DEPS() {
+    local -i missing=0
+    PS_BIN=$(command -v ps 2>/dev/null || true)
+    AWK_BIN=$(command -v awk 2>/dev/null || true)
+    if [[ -z "${PS_BIN}" ]]; then ERR "commande ps introuvable."; missing=1; fi
+    if [[ -z "${AWK_BIN}" ]]; then ERR "commande awk introuvable."; missing=1; fi
+    (( missing == 0 )) || QUIT 1
+    ME="${USER:-}"
+    [[ -n "${ME}" ]] || ME=$(id -un 2>/dev/null || printf '?')
+    NCPU=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1')
+    [[ "${NCPU}" =~ ^[0-9]+$ ]] && (( NCPU > 0 )) || NCPU=1
+    return 0
+}
+
+# Le shell qui tape « psim -g zzz » porte ce motif dans sa propre ligne de
+# commande : sans exclusion, il apparaît dans ses propres résultats. On remonte
+# la chaîne des parents et on écarte ceux qui nomment psim.
+#
+# Tout est fait avec des primitives bash (aucun tr/sed/cut) : le parcours ajoute
+# sinon une trentaine de forks au démarrage, ce qui coûtait plus cher que la
+# lecture de taille qu'on vient d'économiser.
+COLLECT_EXCLUDES() {
+    EXCL_PIDS=("${SELF_PID}")
+    local p="${PPID:-0}" cmd='' line='' ppid='' i=0
+    local -a _argv=()
+    while (( i < 12 )) && [[ "${p}" =~ ^[0-9]+$ ]] && (( p > 1 )); do
+        [[ -r "/proc/${p}/cmdline" ]] || break
+        mapfile -d '' -t _argv 2>/dev/null <"/proc/${p}/cmdline" || true
+        cmd="${_argv[*]}"
+        [[ "${cmd}" == *psim* ]] && EXCL_PIDS+=("${p}")
+        ppid=''
+        while IFS= read -r line; do
+            if [[ "${line}" == PPid:* ]]; then
+                ppid="${line#PPid:}"
+                ppid="${ppid//[[:space:]]/}"
+                break
+            fi
+        done 2>/dev/null <"/proc/${p}/status" || true
+        [[ -n "${ppid}" ]] || break
+        p="${ppid}"
+        i=$((i + 1))
+    done
+    return 0
+}
+
+PREPARE_CACHE() {
+    if ! mkdir -p "${CACHE_DIR}" 2>/dev/null; then
+        WARN "impossible de créer ${CACHE_DIR} : journal et défilement désactivés"
+        CACHE_DIR=""
+        DRAW_FILE=""
+        LOG_FILE=""
+        LOG=0
+        return 0
+    fi
+    chmod 700 "${CACHE_DIR}" 2>/dev/null || true
+    # ménage : seulement les états d'instances mortes. Effacer drawn.* sans
+    # distinction cassait le défilement d'une instance voisine (TOTAL perdu).
+    local f pid
+    for f in "${CACHE_DIR}"/drawn.*; do
+        [[ -e "${f}" ]] || continue
+        pid="${f##*.}"
+        [[ "${pid}" =~ ^[0-9]+$ ]] || { rm -f "${f}" 2>/dev/null || true; continue; }
+        (( pid == SELF_PID )) && continue
+        [[ -d "/proc/${pid}" ]] || rm -f "${f}" 2>/dev/null || true
+    done
+    : > "${DRAW_FILE}" 2>/dev/null || DRAW_FILE=""
+    [[ -z "${DRAW_FILE}" ]] || chmod 600 "${DRAW_FILE}" 2>/dev/null || true
+    return 0
+}
+
+# La taille est lue UNE fois au lancement (deux appels tput = deux forks) puis
+# seulement sur SIGWINCH : un tick ne doit forker pour rien. READ_SIZE 1 force
+# la relecture.
+READ_SIZE() {
+    local cols lines force="${1:-0}"
+    if (( force == 0 && SIZE_KNOWN == 1 )); then
+        return 0
+    fi
+    if (( TTY == 1 )); then
+        cols=$(tput cols 2>/dev/null || printf '%s' "${COLUMNS:-0}")
+        lines=$(tput lines 2>/dev/null || printf '%s' "${LINES:-0}")
+    else
+        cols="${COLUMNS:-0}"
+        lines="${LINES:-0}"
+    fi
+    SIZE_KNOWN=1
+    [[ "${cols}"  =~ ^[0-9]+$ ]] || cols=0
+    [[ "${lines}" =~ ^[0-9]+$ ]] || lines=0
+    (( cols  > 0 )) || cols=120
+    (( lines > 0 )) || lines=40
+    WIDTH=$((cols - 1))
+    HEIGHT=$((lines))
+    (( WIDTH  < 1 )) && WIDTH=1
+    (( HEIGHT < 1 )) && HEIGHT=1
+    return 0
+}
+
+##############################################################################
+# Script awk (commun ; newbie=1/0)
+##############################################################################
+IFS= read -r -d '' AWK_MAIN <<'AWKEOF' || true
+BEGIN {
+    filter = ENVIRON["PSIM_FILTER"]
+    lfilter = tolower(filter)
+    # écart entre la colonne cmd et celle des options (même valeur dans le
+    # budget de largeur et dans le dessin : elles ne peuvent pas diverger)
+    SEP = 2
+    SEPS = sprintf("%*s", SEP, "")
+
+    if (newbie) {
+        # la colonne ppid n'est demandée à ps que si l'arbre en a besoin
+        # (treep=1) : elle sert au calcul, elle n'est jamais affichée ici
+        f_ppid = treep ? 2 : 0
+        d = treep ? 1 : 0
+        f_user = 2 + d; f_rss = 3 + d; f_cpu = 4 + d; f_cmd = 5 + d; f_arg = 6 + d
+        prefix = 7 + 1 + 10 + 1 + 6 + 1 + 6 + 3
+        hdr_cmd = (showopts ? "CMD" : "COMMAND")
+        hdr_cpu = cpu_mode ? "%CPU/m" : "%CPU"
+    } else {
+        f_ppid = 2; f_user = 3; f_nice = 4; f_rss = 5
+        f_mem = 6; f_cpu = 7; f_cmd = 8; f_arg = 9
+        prefix = 7 + 1 + 7 + 1 + 10 + 1 + 3 + 1 + 6 + 1 + 6 + 1 + 6 + 3
+        hdr_cmd = (showopts ? "CMD" : "COMMAND")
+        hdr_cpu = cpu_mode ? "%CPU/m" : "%CPU"
+    }
+    avail = width - prefix
+    if (avail < 10) avail = 10
+    # écart entre la commande et ses arguments : il fait partie du budget, donc
+    # l'élargir rétrécit d'autant la colonne des options
+    cmdw = (avail > 60) ? 60 : avail
+    optw = avail - cmdw - SEP
+    if (optw < 0) optw = 0
+
+    if (color) {
+        RED = red; GREEN = green; YELLOW = yellow; BLUE = blue
+        MAGENTA = magenta; CYAN = cyan; WHITE = white; GREY = grey
+        BG = bg; RESET = reset; RFG = resetfg; UL = underline; BOLD = bold
+        EL = "\033[0K"
+    } else {
+        RED = ""; GREEN = ""; YELLOW = ""; BLUE = ""
+        MAGENTA = ""; CYAN = ""; WHITE = ""; GREY = ""
+        BG = ""; RESET = ""; RFG = ""; UL = ""; BOLD = ""
+        EL = ""
+    }
+    if (!pad) { cmdw = 0; optw = 0 }
+    started = 0
+    selrow = 0
+    selabs = 0
+    uloff = color ? "\033[24m" : ""
+    mb = (length("é") == 1)
+    cont_re = "[" sprintf("%c", 128) "-" sprintf("%c", 191) "]$"
+    # Arbre : un glyphe de branche fait 2 caractères mais 4 octets en UTF-8, donc
+    # le jeu de glyphes suit la capacité multibyte de awk — c'est elle qui
+    # décide si length() compte des caractères ou des octets, et donc si le
+    # padding de la colonne reste juste. Le critère est celui d'awk, pas celui du
+    # terminal : sur une machine dont la locale est UTF-8 mais le terminal en
+    # latin-1, les branches sortiraient en déchets — cas non couvert, et
+    # volontairement : choisir UTF-8 pour un awk qui compte en octets casserait
+    # l'alignement, ce qui est pire que des glyphes approximatifs.
+    if (mb) { T_TEE = "├─"; T_LAST = "└─"; T_VERT = "│ " } else { T_TEE = "|-"; T_LAST = "`-"; T_VERT = "| " }
+    # profondeur dessinée : bornée par la largeur de la colonne de commande en
+    # mode tableau ; en mode brut (pipe, pad=0) rien n'est tronqué, et cmdw vaut
+    # 0 — la borne doit donc y être large, sinon les branches s'arrêtent au
+    # deuxième niveau
+    if (pad) {
+        treeind_max = cmdw - 12
+        if (treeind_max > 24) treeind_max = 24
+        if (treeind_max < 4) treeind_max = 4
+    } else {
+        treeind_max = 48
+    }
+    total = 0
+    np = 0
+    hdr_plain_len = prefix + length(hdr_cmd)
+    emit_header()
+}
+
+# Tronque sans couper un caractère UTF-8 (awk non multibyte : mawk, busybox)
+function cut(s, n) {
+    s = substr(s, 1, n)
+    if (!mb) { while (s ~ cont_re) s = substr(s, 1, length(s) - 1) }
+    return s
+}
+
+# Colonne d'en-tête colorée, soulignée si c'est la colonne de tri active.
+function hc(txt, col, active) {
+    return (active ? UL : "") col txt (active ? uloff : "") RFG
+}
+
+# Émet une ligne sans newline final : le curseur reste sur la dernière ligne,
+# ce qui évite de faire défiler l'écran d'une ligne à chaque rafraîchissement.
+function emit(s) {
+    if (!started) { printf "%s", s; started = 1 }
+    else          { printf "\n%s", s }
+}
+
+function emit_header() {
+    if (header && pad) {
+        if (newbie) {
+            hdr = BG \
+                hc(sprintf("%7s", "PID"), MAGENTA, sort ~ /^-?pid$/) " " \
+                hc(sprintf("%-10s", "USER"), BLUE, sort ~ /^-?user$/) " " \
+                hc(sprintf("%6s", "MiB"), GREEN, sort ~ /^-?rss$/) " " \
+                hc(sprintf("%6s", hdr_cpu), GREEN, sort ~ /^-?%?cpu$/) "   " \
+                hc(hdr_cmd, YELLOW, sort ~ /^-?%?cmd$/)
+        } else {
+            hdr = BG \
+                hc(sprintf("%7s", "PID"), MAGENTA, sort ~ /^-?pid$/) " " \
+                hc(sprintf("%7s", "PPID"), CYAN, sort ~ /^-?ppid$/) " " \
+                hc(sprintf("%-10s", "USER"), BLUE, sort ~ /^-?user$/) " " \
+                hc(sprintf("%3s", "NI"), WHITE, sort ~ /^-?nice$/) " " \
+                hc(sprintf("%6s", "MiB"), GREEN, sort ~ /^-?rss$/) " " \
+                hc(sprintf("%6s", "%MEM"), GREEN, sort ~ /^-?%mem$/) " " \
+                hc(sprintf("%6s", hdr_cpu), GREEN, sort ~ /^-?%?cpu$/) "   " \
+                hc(hdr_cmd, YELLOW, sort ~ /^-?%?cmd$/)
+        }
+        # statut à droite (filtre, gel, défilement) : il n'a de place que si
+        # l'entête est plus étroit que le terminal
+        stat = ""
+        pad_h = width - hdr_plain_len
+        if (statusw > 0 && pad_h > statusw + 1) {
+            pad_h = pad_h - statusw - 2
+            stat = "  " status
+        }
+        if (pad_h < 0) pad_h = 0
+        emit(sprintf("%s%s%s%s%s", hdr, sprintf("%*s", pad_h, ""), stat, EL, RESET))
+    }
+}
+
+##############################################################################
+# Ligne : producteur (flux ps ou arbre) et dessinateur unique
+#
+# C_* porte la ligne courante. Le bloc d'enregistrement la remplit depuis les
+# champs de ps et dessine tout de suite ; le mode arbre l'emmagasine (P_*),
+# réordonne en fin de flux, puis rejoue les lignes par le même dessinateur.
+##############################################################################
+function store_row(v) {
+    np++
+    P_pid[np] = C_pid
+    P_ppid[np] = C_ppid
+    P_vis[np] = v
+    P_user[np] = C_user
+    P_nice[np] = C_nice
+    P_rss[np] = C_rss
+    P_mem[np] = C_mem
+    P_cpu[np] = C_cpu
+    P_rcpu[np] = C_rcpu
+    P_cmd[np] = C_cmd
+    P_args[np] = C_args
+}
+
+function load_row(i) {
+    C_pid = P_pid[i]
+    C_ppid = P_ppid[i]
+    C_user = P_user[i]
+    C_nice = P_nice[i]
+    C_rss = P_rss[i]
+    C_mem = P_mem[i]
+    C_cpu = P_cpu[i]
+    C_rcpu = P_rcpu[i]
+    C_cmd = P_cmd[i]
+    C_args = P_args[i]
+}
+
+# ind : glyphes de branche déjà calculés, indw leur largeur visible. L'écart
+# entre le nombre de caractères et d'octets est réglé en BEGIN (jeu ASCII quand
+# awk ne sait pas compter en caractères).
+function draw_row(ind, indw,   line, cw, ow, cmd_d, pad_n, user_c, nice_c, cmd_c, dir_p, base_p, indc) {
+    shown++
+    rowpid[shown] = C_pid
+    sum_rss += C_rss
+    sum_cpu += C_rcpu
+    if (!newbie) sum_mem += C_mem
+
+    if (!pad) {
+        if (newbie)
+            printf "%s %s %.0f %.1f %s%s%s\n", C_pid, C_user, C_rss, C_cpu, ind, C_cmd, (C_args != "" ? " " C_args : "")
+        else
+            printf "%s %s %s %s %.0f %.1f %.1f %s%s%s\n", C_pid, C_ppid, C_user, C_nice, C_rss, C_mem, C_cpu, ind, C_cmd, (C_args != "" ? " " C_args : "")
+        return
+    }
+
+    # l'indentation sort de la colonne de commande, et d'elle seule : les deux
+    # colonnes gardent donc leur largeur nominale et la colonne des options
+    # commence au même point sur toutes les lignes, quel que soit le niveau.
+    # Repli sur les arguments seulement si la commande deviendrait illisible.
+    cw = cmdw
+    ow = optw
+    if (indw > 0) {
+        cw = cmdw - indw
+        if (cw < 10) {
+            cw = 10
+            ow = optw - (indw + cw - cmdw)
+            if (ow < 0) ow = 0
+        }
+    }
+    indc = (indw > 0) ? GREY ind RESET : ""
+
+    cmd_d = cut(C_cmd, cw)
+    pad_n = cw - length(cmd_d)
+    if (pad_n < 0) pad_n = 0
+
+    if (showopts && cmd_d ~ /\//) {
+        match(cmd_d, /\/[^\/]*$/)
+        dir_p = substr(cmd_d, 1, RSTART)
+        base_p = substr(cmd_d, RSTART + 1)
+        cmd_c = GREY dir_p RESET BOLD YELLOW base_p RESET sprintf("%*s", pad_n, "")
+    } else {
+        cmd_c = BOLD YELLOW cmd_d RESET sprintf("%*s", pad_n, "")
+    }
+
+    if (C_user == "root")
+        user_c = RED substr(C_user, 1, 10) RESET sprintf("%*s", 10 - length(substr(C_user, 1, 10)), "")
+    else if (C_user == me)
+        user_c = BLUE substr(C_user, 1, 10) RESET sprintf("%*s", 10 - length(substr(C_user, 1, 10)), "")
+    else
+        user_c = substr(C_user, 1, 10) sprintf("%*s", 10 - length(substr(C_user, 1, 10)), "")
+
+    if (newbie) {
+        line = MAGENTA sprintf("%7d", C_pid) RESET " " user_c " " \
+               GREEN sprintf("%6.0f", C_rss) RESET " " GREEN sprintf("%6.1f", C_cpu) RESET "   " indc cmd_c
+    } else {
+        if (C_nice == "-")      nice_c = GREY sprintf("%3s", C_nice) RESET
+        else if (C_nice < 0)    nice_c = YELLOW sprintf("%3s", C_nice) RESET
+        else                    nice_c = CYAN sprintf("%3s", C_nice) RESET
+
+        line = MAGENTA sprintf("%7d", C_pid) RESET " " CYAN sprintf("%7d", C_ppid) RESET " " \
+               user_c " " nice_c " " GREEN sprintf("%6.0f", C_rss) RESET " " \
+               GREEN sprintf("%6.1f", C_mem) RESET " " GREEN sprintf("%6.1f", C_cpu) RESET "   " indc cmd_c
+    }
+
+    if (ow > 0 && C_args != "")
+        line = line SEPS GREY cut(C_args, ow) RESET
+
+    # ligne sélectionnée : bande pleine largeur. L'effacement de fin de ligne doit
+    # être émis AVANT le reset final : un EL après le reset repeint la zone avec
+    # les attributs par défaut et coupe la bande à la fin du texte.
+    if (selpid > 0 && C_pid + 0 == selpid) {
+        selrow = shown
+        if (color) gsub(/\033\[0m/, "\033[0m\033[7m", line)
+        emit("\033[7m" line "\033[0K\033[0m")
+        return
+    }
+    emit(line EL)
+}
+
+# Parcours arbre, en profondeur, dans l'ordre où ps a livré les frères : le tri
+# actif reste donc l'ordre des frères, la hiérarchie passe devant.
+function walk(i, pre, depth, last,   lst, cnt, j, child, ind, nxt) {
+    if (seen[i] == 1) return      # garde-fou : un cycle ppid ne boucle pas
+    seen[i] = 1
+    total++
+    # ind : glyphes de la branche de ce nœud ; nxt : ce que ses enfants portent en
+    # plus (la barre verticale reste tant que le nœud n'est pas le dernier frère).
+    # Au-delà du budget d'indentation la branche s'arrête : les descendants
+    # restent visibles, alignés, plutôt que de perdre leur commande.
+    ind = pre
+    nxt = pre
+    if (depth > 0 && length(pre) < treeind_max) {
+        ind = pre (last ? T_LAST : T_TEE)
+        nxt = pre (last ? "  " : T_VERT)
+    }
+    # rang absolu de la sélection, y compris hors écran : c'est lui qui permet
+    # de recadrer la vue sur le processus sélectionné après un défilement
+    if (selpid > 0 && P_pid[i] + 0 == selpid) selabs = total
+    if (total > offset && (limit == 0 || shown < limit)) {
+        load_row(i)
+        draw_row(ind, length(ind))
+    }
+    if (depth >= 200) return      # profondeur aberrante : on cesse de descendre
+    cnt = split(kids[i], lst, " ")
+    for (j = 1; j <= cnt; j++) {
+        child = lst[j] + 0
+        walk(child, nxt, depth + 1, (j == cnt))
+    }
+}
+
+{
+    cmd = $f_cmd
+    # thread noyau = nom entre crochets, mais PAS un zombie ([nom] <defunct>)
+    # (« <defunct> » est un champ séparé : on teste la ligne entière)
+    is_kernel = (substr(cmd, 1, 1) == "[" && $0 !~ /<defunct>$/)
+
+    # vis : la ligne est-elle dans la liste (noyau + filtre) ? En mode arbre, les
+    # lignes invisibles sont tout de même mémorisées : elles portent la parenté.
+    vis = 1
+    if (kernel == 0 && is_kernel) vis = 0
+    if (kernel == 2 && !is_kernel) vis = 0
+
+    args = ""
+    if (NF >= f_arg) {
+        for (i = f_arg; i <= NF; i++) args = args (i > f_arg ? " " : "") $i
+    }
+
+    if (vis && filter != "") {
+        search = tolower($f_user " " cmd " " args)
+        if (search !~ lfilter) vis = 0
+    }
+
+    # mode « options » désactivé : nom de commande seul, sans chemin ni arguments
+    if (showopts == 0 && !is_kernel) {
+        sub(/^.*\//, "", cmd)
+        args = ""
+    }
+
+    C_pid = $1
+    C_ppid = (f_ppid > 0) ? $f_ppid : 0
+    C_user = $f_user
+    C_nice = newbie ? "" : $f_nice
+    C_rss = $f_rss / 1024
+    C_mem = newbie ? 0 : $f_mem
+    C_rcpu = $f_cpu
+    C_cpu = cpu_mode ? C_rcpu / ncpu : C_rcpu
+    C_cmd = cmd
+    C_args = args
+
+    if (tree) { store_row(vis); next }
+    if (!vis) next
+
+    total++
+    if (selpid > 0 && C_pid + 0 == selpid) selabs = total
+    if (total <= offset) next
+    if (limit > 0 && shown >= limit) next
+    draw_row("", 0)
+}
+
+END {
+    # Mode arbre : le flux est complet, on peut ranger chaque ligne sous son
+    # parent puis descendre. L'ordre de ps (donc le tri actif) est conservé entre
+    # frères ; un processus dont le parent est absent de la liste (filtré, ou
+    # sorti de ps) devient une racine — une forêt plutôt qu'une branche coupée.
+    if (tree) {
+        for (i = 1; i <= np; i++)
+            if (P_vis[i]) idx[P_pid[i]] = i
+        roots = ""
+        for (i = 1; i <= np; i++) {
+            if (!P_vis[i]) continue
+            p = P_ppid[i]
+            # kids est indexé par rang de ligne, pas par PID : deux lignes de même
+            # PID (instantané incohérent) ne se volent pas leurs enfants
+            if ((p in idx) && idx[p] != i) kids[idx[p]] = kids[idx[p]] " " i
+            else                           roots = roots " " i
+        }
+        nr = split(roots, rt, " ")
+        for (j = 1; j <= nr; j++) walk(rt[j] + 0, "", 0, (j == nr))
+        # second passage : un nœud jamais atteint (cycle de ppid, chaîne plus
+        # profonde que la borne) remonte à la racine — aucune ligne visible ne
+        # doit manquer au total, même sur un instantané incohérent
+        for (i = 1; i <= np; i++)
+            if (P_vis[i] && seen[i] != 1) walk(i, "", 0, 1)
+    }
+
+    if (drawfile != "") {
+        # trame d'état : totaux, rangs de la sélection, puis les PID visibles dans
+        # l'ordre — l'arithmétique du curseur se fait côté bash, à la frappe
+        printf "%d %d %d %d\n", shown, total, selrow, selabs > drawfile
+        for (i = 1; i <= shown; i++) printf "%d\n", rowpid[i] > drawfile
+    }
+
+    # remplir l'écran ne sert qu'en dynamique : en statique, --100000 sortait
+    # 99 999 lignes vides
+    if (fill) {
+        for (i = shown; i < limit; i++) emit(EL)
+    }
+    if (footer && pad) {
+        # le pied de page suit le mode d'affichage des lignes
+        norm = cpu_mode ? ((ncpu > 0) ? sum_cpu / ncpu : sum_cpu) : sum_cpu
+        tail = sprintf("%d/%d proc", shown, total)
+        if (newbie)
+            head = sprintf("%-18s %6.0f %6.1f   ", "TOTAL (displayed)", sum_rss, norm)
+        else
+            head = sprintf("%-30s %6.0f %6.1f %6.1f   ", "TOTAL (displayed)", sum_rss, sum_mem, norm)
+        room = width - length(head)
+        if (room < 0) room = 0
+        emit(RED head substr(tail, 1, room) RESET EL)
+    }
+}
+AWKEOF
+
+##############################################################################
+# Rendu
+##############################################################################
+RENDER() {
+    local -i pad="$1" limit="$2" header="$3" footer="$4" fill="${5:-${1}}"
+    local format
+    local -a pscmd awkcmd
+
+    STATUS_BUILD
+
+    if (( NEWBIE == 1 )); then
+        # l'arbre a besoin des ppid : la colonne est demandée sans être affichée
+        if (( TREE == 1 )); then
+            format="pid,ppid,user,rss,%cpu,cmd"
+        else
+            format="pid,user,rss,%cpu,cmd"
+        fi
+    else
+        format="pid,ppid,user,nice,rss,%mem,%cpu,cmd"
+    fi
+
+    # le filtre passe par l'environnement : -v interpréterait les \
+    PSIM_FILTER="${FILTER}"
+    export PSIM_FILTER
+
+    awkcmd=("${AWK_BIN}"
+        -v newbie="${NEWBIE}"  -v width="${WIDTH}"    -v pad="${pad}" -v fill="${fill}"
+        -v limit="${limit}"    -v offset="${OFFSET}"  -v header="${header}"
+        -v footer="${footer}"  -v color="$(( NO_COLOR == 0 ? 1 : 0 ))"
+        -v showopts="${SHOW_OPTS}" -v kernel="${KERNEL}" -v sort="${SORT}" -v cpu_mode="${CPU_MODE}"
+        -v selpid="${SEL_PID}" -v tree="${TREE}" \
+        -v treep="$(( NEWBIE == 1 && TREE == 1 ? 1 : 0 ))"
+        -v me="${ME}"          -v ncpu="${NCPU}"     -v drawfile="${DRAW_FILE}"
+        -v status="${status_c}" -v statusw="${STATUSW}"
+        -v red="${Rouge}"      -v green="${Vert}"     -v yellow="${Jaune}"
+        -v blue="${Bleu}"      -v magenta="${Magenta}" -v cyan="${Cyan}"
+        -v white="${Blanc}"    -v grey="${Gris}"      -v bg="${BgGris}"
+        -v reset="${Reset}"    -v resetfg="${ResetFg}" -v underline="${Underline}"
+        -v bold="${Gras}"
+    )
+
+    # -ww : ne jamais laisser ps tronquer « cmd » à la largeur de COLUMNS
+    # (sinon le basename devient faux et le filtre rate les arguments)
+    # une seule sélection : tout sauf nous-mêmes (le filtrage noyau est fait par awk,
+    # ce qui évite de supposer que PID 2 est kthreadd)
+    pscmd=("${PS_BIN}" -ww -o "${format}" --sort="${SORT}" --no-headers)
+    local pid
+    for pid in "${EXCL_PIDS[@]}"; do
+        (( pid > 1 )) || continue
+        pscmd+=(--deselect --pid "${pid}")
+    done
+    if (( SELF_PID > 1 )); then
+        pscmd+=(--deselect --ppid "${SELF_PID}")
+    fi
+
+    local -i arc=0
+    if (( DEBUG == 1 )); then
+        if ! "${pscmd[@]}" | "${awkcmd[@]}" "${AWK_MAIN}"; then arc=${PIPESTATUS[1]}; fi
+    else
+        if ! "${pscmd[@]}" 2>/dev/null | "${awkcmd[@]}" "${AWK_MAIN}" 2>/dev/null; then arc=${PIPESTATUS[1]}; fi
+    fi
+    # awk échoue (code 2) sur une expression régulière invalide
+    if [[ -n "${FILTER}" ]] && (( arc != 0 )); then FILTER_INVALID=1; else FILTER_INVALID=0; fi
+    return 0
+}
+
+##############################################################################
+# Statut
+##############################################################################
+# Statut compact, à droite de l'entête : filtre, gel/intervalle, défilement.
+# C'est tout ce que le bandeau apportait en plus des raccourcis — ceux-ci vivent
+# maintenant dans la boîte de la touche H, ce qui rend une ligne au tableau.
+# status_p = version nue (largeur), status_c = version colorée.
+STATUS_BUILD() {
+    status_p=''
+    status_c=''
+    if :; then
+        local caret=''
+        (( FILTER_EDIT == 1 )) && caret='_'
+        if [[ -n "${FILTER}" || ${FILTER_EDIT} -eq 1 ]]; then
+            status_p+=" /${FILTER}${caret}"
+            if (( FILTER_INVALID == 1 )); then
+                status_p+=' invalide'
+                status_c+=" ${Jaune}/${FILTER}${caret}${ResetFg} ${RougeBold}invalide${ResetFg}"
+            else
+                status_c+=" ${Jaune}/${FILTER}${caret}${ResetFg}"
+            fi
+        fi
+        if (( FREEZE == 1 )); then
+            status_p+=" ${ICON_CLOCK} GEL"
+            status_c+=" ${RougeBold}${ICON_CLOCK} GEL${ResetFg}"
+        elif (( INTERVAL != 1 )); then
+            status_p+=" ${ICON_CLOCK} ${INTERVAL}s"
+            status_c+=" ${Gris}${ICON_CLOCK} ${INTERVAL}s${ResetFg}"
+        fi
+        if (( TREE == 1 )); then
+            status_p+=" arbre"
+            status_c+=" ${Cyan}arbre${ResetFg}"
+        fi
+        if (( OFFSET > 0 )); then
+            status_p+=" +${OFFSET}"
+            status_c+=" ${Gris}+${OFFSET}${ResetFg}"
+        fi
+    fi
+    STATUSW=${#status_p}
+    return 0
+}
+
+# Repli quand l'entête est masquée (touche h) : le statut prend alors une ligne
+# en bas, réservée par la boucle pour que la hauteur ne saute pas.
+PRINT_STATUS() {
+    [[ -n "${status_c}" ]] || return 0
+    printf '%s\033[K%s' "${status_c}" "${Reset}"
+    return 0
+}
+
+# bascule entre deux clés de tri : SORT_TOGGLE CLÉ_A CLÉ_B. Retirée par
+# erreur lors du passage du statut dans l'entête ; les raccourcis de tri
+# appelaient donc une fonction inexistante (exit 127).
+SORT_TOGGLE() {
+    if [[ "${SORT}" == "$1" ]]; then SORT="$2"; else SORT="$1"; fi
+    return 0
+}
+
+READ_DRAWN() {
+    local drawn="0" found="0" line
+    ROWPIDS=()
+    SELROW=0
+    SELABS=0
+    if [[ -n "${DRAW_FILE}" && -s "${DRAW_FILE}" ]]; then
+        {
+            read -r drawn found SELROW SELABS || true
+            while IFS= read -r line; do
+                # tableau 1-based : ROWPIDS[1] est la première ligne visible
+                [[ "${line}" =~ ^[0-9]+$ ]] && ROWPIDS[${#ROWPIDS[@]}+1]="${line}"
+            done
+        } < "${DRAW_FILE}" 2>/dev/null || true
+    fi
+    [[ "${drawn}" =~ ^[0-9]+$ ]] || drawn=0
+    [[ "${found}" =~ ^[0-9]+$ ]] || found=0
+    [[ "${SELROW}" =~ ^[0-9]+$ ]] || SELROW=0
+    [[ "${SELABS}" =~ ^[0-9]+$ ]] || SELABS=0
+    TOTAL=$((found))
+    return 0
+}
+
+# Rang de la sélection dans la fenêtre courante (0 = absente ou hors écran).
+SEL_LOCATE() {
+    local -i i
+    SELIDX=0
+    for (( i = 1; i <= ${#ROWPIDS[@]}; i++ )); do
+        if (( ROWPIDS[i] == SEL_PID )); then SELIDX=${i}; return 0; fi
+    done
+    return 0
+}
+
+# Déplace la vue sur une sélection sortie de l'écran. Positionne SELMOVED quand
+# la vue a bougé : la fenêtre en mémoire est alors périmée, on attend la trame
+# suivante avant de déplacer la sélection.
+SEL_RECENTER() {
+    local -i max_off=$(( TOTAL - LIMIT ))
+    (( max_off < 0 )) && max_off=0
+    SELMOVED=0
+    if (( SEL_PID > 0 && SELIDX == 0 && SELABS > 0 )); then
+        OFFSET=$(( SELABS - 1 ))
+        (( OFFSET > max_off )) && OFFSET=${max_off}
+        (( OFFSET < 0 )) && OFFSET=0
+        SELMOVED=1
+    fi
+    return 0
+}
+
+# Flèche maintenue : SEL_STEP_KEY -1 (haut) ou 1 (bas) déplace la sélection du
+# pas courant. Le pas grandit avec la répétition : tenir la flèche traverse la
+# liste au lieu d'avancer d'une ligne par auto-répétition du terminal.
+SEL_STEP_KEY() {
+    local -i dir="$1" i step
+    NOW_US
+    if (( NOWTIC > 0 && SEL_LAST > 0 && NOWTIC - SEL_LAST <= REPEAT_US )); then
+        SEL_REP=$(( SEL_REP + 1 ))
+    else
+        SEL_REP=0
+    fi
+    SEL_LAST=${NOWTIC}
+    step=$(( 1 + SEL_REP / 2 ))            # 1, 1, 2, 2, 3, 3, 4, 4, 5…
+    (( step > SEL_FAST )) && step=${SEL_FAST}
+    for (( i = 0; i < step; i++ )); do
+        if (( dir < 0 )); then
+            SEL_UP
+        else
+            SEL_DOWN
+        fi
+    done
+    return 0
+}
+
+# Flèche haut : la ligne sélectionnée est la vérité, la vue suit aux bords.
+SEL_UP() {
+    SEL_LOCATE
+    SEL_RECENTER
+    (( SELMOVED == 1 )) && return 0
+    (( ${#ROWPIDS[@]} == 0 )) && { SEL_PID=0; return 0; }
+    (( SEL_PID == 0 || SELIDX == 0 )) && { SEL_PID=${ROWPIDS[1]}; return 0; }
+    if (( SELIDX > 1 )); then
+        SEL_PID=${ROWPIDS[SELIDX-1]}
+    elif (( OFFSET > 0 )); then
+        OFFSET=$(( OFFSET - 1 ))          # la ligne sélectionnée descend d'un cran
+    fi
+    return 0
+}
+
+# Flèche bas : symétrique.
+SEL_DOWN() {
+    local -i max_off=$(( TOTAL - LIMIT ))
+    (( max_off < 0 )) && max_off=0
+    SEL_LOCATE
+    SEL_RECENTER
+    (( SELMOVED == 1 )) && return 0
+    (( ${#ROWPIDS[@]} == 0 )) && { SEL_PID=0; return 0; }
+    (( SEL_PID == 0 || SELIDX == 0 )) && { SEL_PID=${ROWPIDS[1]}; return 0; }
+    if (( SELIDX < ${#ROWPIDS[@]} )); then
+        SEL_PID=${ROWPIDS[SELIDX+1]}
+    elif (( OFFSET < max_off )); then
+        OFFSET=$(( OFFSET + 1 ))          # la ligne sélectionnée monte d'un cran
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Souris (mode dynamique uniquement)
+#
+# Le terminal est mis en rapports « appui / relâchement » (1000h) et en
+# encodage SGR (1006h) : un clic arrive comme \e[<bouton;colonne;ligneM (m au
+# relâchement), une molette comme les boutons 64 (haut) et 65 (bas). La
+# séquence fait plus de deux octets, donc elle est drainée ici : sans cela ses
+# caractères restants (« M », « 0 », « ; »…) tomberaient dans le case des
+# raccourcis — un clic basculerait le mode %CPU. Les vieux terminaux (encodage
+# X10, \e[M suivi de trois octets décalés de 32) sont acceptés aussi, pour la
+# même raison : ne rien laisser traîner dans le tampon.
+# ---------------------------------------------------------------------------
+
+# Draine la fin d'une séquence souris dont les deux premiers octets sont déjà
+# lus (passés en argument : « [< » ou « [M ») -> MOUSE_BTN/X/Y/REL.
+MOUSE_READ() {
+    local rest='' c=''
+    local -i n=0 b=0 y=0 rel=0
+    MOUSE_BTN=-1
+    MOUSE_Y=0
+    MOUSE_REL=0
+    if [[ "$1" == '[<' ]]; then
+        while (( n < 24 )); do
+            IFS= read -rt 0.05 -n 1 c 2>/dev/null || break
+            n=$(( n + 1 ))
+            if [[ "${c}" == 'M' || "${c}" == 'm' ]]; then
+                [[ "${c}" == 'm' ]] && rel=1
+                break
+            fi
+            rest+="${c}"
+        done
+        [[ "${rest}" =~ ^([0-9]+)\;([0-9]+)\;([0-9]+)$ ]] || return 0
+        b=${BASH_REMATCH[1]}
+        y=${BASH_REMATCH[3]}
+    else
+        # X10 : trois octets, dont un peut être une espace (0x20) — d'où IFS vide
+        local -a raw=()
+        for (( n = 0; n < 3; n++ )); do
+            IFS= read -rt 0.05 -n 1 c 2>/dev/null || return 0
+            [[ -n "${c}" ]] || return 0
+            printf -v "raw[n]" '%d' "'${c}"
+        done
+        b=$(( raw[0] - 32 ))
+        y=$(( raw[2] - 32 ))
+        (( (b & 3) == 3 )) && rel=1
+    fi
+    MOUSE_BTN=${b}
+    MOUSE_Y=${y}
+    MOUSE_REL=${rel}
+    return 0
+}
+
+# Horodatage en microsecondes sans fork (EPOCHREALTIME, bash >= 5). Absent ou
+# illisible : NOWTIC reste à 0 et le double-clic est simplement inactif.
+NOW_US() {
+    local t="${EPOCHREALTIME:-}"
+    NOWTIC=0
+    [[ -n "${t}" ]] || return 0
+    t="${t/[.,]/}"                  # la virgule décimale dépend de la locale
+    [[ "${t}" =~ ^[0-9]+$ ]] || return 0
+    NOWTIC=$(( 10#${t} ))
+    return 0
+}
+
+# Clic gauche : la ligne sous le curseur devient la sélection ; deux appuis
+# rapprochés sur la même ligne ouvrent la boîte de détails (DOUBLE). Hors du
+# tableau (entête, ligne de statut, pied de page, sous la dernière ligne) : rien.
+# Molette : la vue seule défile, la sélection ne bouge pas.
+MOUSE_ACT() {
+    local -i i max_off step=${WHEEL_STEP} prev release_only
+    # REDRAW reste à 0 quand l'événement ne change rien (relâchement, molette
+    # neutralisée, cran en butée, clic hors tableau) : la boucle réattend une
+    # touche sans refaire une trame, sinon une rafale de molette déclenche
+    # autant de ps+awk que de crans et l'écran donne l'impression de ramer.
+    REDRAW=0
+    (( MOUSE_BTN < 0 )) && return 0
+    # Un relâchement ne compte pas comme un clic (le double-clic se compte sur
+    # les appuis), sauf s'il est le seul événement : certains terminaux avalent
+    # l'appui d'un clic qui donne le focus à la fenêtre et ne livrent que le
+    # relâchement — sans cette tolérance, le premier clic ne fait rien.
+    release_only=${MOUSE_REL}
+    if (( (MOUSE_BTN & 64) != 0 )); then
+        (( release_only == 1 )) && return 0
+        (( WHEEL == 1 )) || return 0          # molette neutralisée (WHEEL=0)
+        max_off=$(( TOTAL - LIMIT ))
+        (( max_off < 0 )) && max_off=0
+        prev=${OFFSET}
+        if (( (MOUSE_BTN & 1) == 0 )); then
+            OFFSET=$(( OFFSET - step ))
+        else
+            OFFSET=$(( OFFSET + step ))
+        fi
+        (( OFFSET < 0 )) && OFFSET=0
+        (( OFFSET > max_off )) && OFFSET=${max_off}
+        (( OFFSET != prev )) && REDRAW=1
+        return 0
+    fi
+    (( (MOUSE_BTN & 3) == 0 )) || return 0        # bouton gauche seulement
+    i=$(( MOUSE_Y - HEADER ))                     # rang de ligne dans la fenêtre
+    (( i >= 1 )) || return 0
+    (( i <= LIMIT )) || return 0
+    (( i <= ${#ROWPIDS[@]} )) || return 0
+    (( SEL_PID != ROWPIDS[i] )) && REDRAW=1
+    SEL_PID=${ROWPIDS[i]}
+    (( release_only == 1 )) && return 0           # relâchement vu seul
+    NOW_US
+    DOUBLE=0
+    if (( NOWTIC > 0 && CLICK_LAST > 0 && i == CLICK_ROW \
+          && NOWTIC - CLICK_LAST <= CLICK_US )); then
+        CLICK_LAST=0                  # le triple-clic ne rouvre pas la boîte
+        DOUBLE=1
+        REDRAW=1
+    else
+        CLICK_LAST=${NOWTIC}
+        CLICK_ROW=${i}
+    fi
+    return 0
+}
+
+# Touche d'une boîte modale : les événements souris sont avalés, une boîte ne
+# se ferme pas sur un clic -> MODAL_KEY ('' sur EOF).
+MODAL_KEY() {
+    local k='' seq=''
+    MODAL_KEY=''
+    while :; do
+        IFS= read -rsn1 k 2>/dev/null || return 0
+        if [[ "${k}" != $'\e' ]]; then
+            MODAL_KEY="${k}"
+            return 0
+        fi
+        read -rt 0.05 -n 2 seq 2>/dev/null || true
+        if [[ "${seq}" == '[<' || "${seq}" == '[M' ]]; then
+            MOUSE_READ "${seq}"
+            continue
+        fi
+        MODAL_KEY=$'\e'"${seq}"
+        return 0
+    done
+}
+
+# Mode saisie du filtre : chaque caractère met FILTER à jour (rendu en direct).
+FILTER_EDIT_KEY() {
+    local key="$1" seq=""
+    case "${key}" in
+        $'\e')
+            read -rt 0.05 -n 2 seq 2>/dev/null || true
+            if [[ "${seq}" == '[<' || "${seq}" == '[M' ]]; then
+                MOUSE_READ "${seq}"         # un clic ne touche pas au filtre
+            elif [[ -z "${seq}" ]]; then    # Échap seul : on annule
+                FILTER="${FILTER_SAVE}"
+                FILTER_EDIT=0
+                OFFSET=0
+            fi
+            ;;                              # sinon (flèche) : ignorée
+        ''|$'\r'|$'\n') FILTER_EDIT=0 ;;    # Entrée (read -n 1 rend une chaîne vide)
+        $'\x7f'|$'\b')                      # Retour arrière
+            FILTER_BUF="${FILTER_BUF%?}"
+            FILTER="${FILTER_BUF}"
+            OFFSET=0
+            ;;
+        $'\x15')                            # Ctrl-U : efface tout
+            FILTER_BUF=""
+            FILTER=""
+            OFFSET=0
+            ;;
+        *)                                    # caractère imprimable
+            FILTER_BUF+="${key}"
+            FILTER="${FILTER_BUF}"
+            OFFSET=0
+            ;;
+    esac
+    return 0
+}
+
+HANDLE_KEY() {
+    local key seq
+    local -i max_off rc
+
+    while :; do
+        key=''
+        seq=''
+        rc=0
+        read -rt "${INTERVAL}" -n 1 key 2>/dev/null || rc=$?
+        if (( rc != 0 )); then
+            # 1 = EOF (entrée fermée) : on ne tourne pas à vide
+            (( rc > 128 )) || sleep "${INTERVAL}"
+            return 0
+        fi
+
+        if (( FILTER_EDIT == 1 )); then
+            FILTER_EDIT_KEY "${key}"
+            return 0
+        fi
+
+        if [[ "${key}" == $'\e' ]]; then
+            read -rt 0.05 -n 2 seq 2>/dev/null || true
+            key+="${seq}"
+            # souris : la séquence est drainée puis traitée, jamais passée au case
+            if [[ "${seq}" == '[<' || "${seq}" == '[M' ]]; then
+                MOUSE_READ "${seq}"
+                if [[ -n "${PSIM_MOUSE_DEBUG:-}" ]]; then
+                    printf '%s btn=%s y=%s rel=%s header=%s limit=%s rows=%s sel=%s seq=%q\n' \
+                        "$(date +%T)" "${MOUSE_BTN}" "${MOUSE_Y}" "${MOUSE_REL}" "${HEADER}" \
+                        "${LIMIT}" "${#ROWPIDS[@]}" "${SEL_PID}" "${seq}" \
+                        >> "${CACHE_DIR}/mouse.log" 2>/dev/null || true
+                fi
+                MOUSE_ACT
+                if (( DOUBLE == 1 && SEL_PID > 0 )); then
+                    DOUBLE=0
+                    DETAILS_OVERLAY "${SEL_PID}"
+                    return 0
+                fi
+                # rien n'a changé à l'écran : on réattend une touche sans trame
+                (( REDRAW == 1 )) && return 0
+                continue
+            fi
+        fi
+
+        case "${key}" in
+            /) FILTER_EDIT=1; FILTER_SAVE="${FILTER}"; FILTER_BUF="${FILTER}"; OFFSET=0 ;;
+            o) SHOW_OPTS=$((1 - SHOW_OPTS)) ;;
+            k) KERNEL=$(( (KERNEL + 1) % 3 )) ;;
+            t) TREE=$((1 - TREE)); OFFSET=0 ;;
+            h) HEADER=$((1 - HEADER)) ;;
+            f) FOOTER=$((1 - FOOTER)) ;;
+            '?') HELP_OVERLAY ;;
+            q|Q) QUIT 0 ;;
+            +)
+                if (( INTERVAL >= 120 )); then INTERVAL=120; else INTERVAL=$((INTERVAL + 1)); fi
+                FREEZE=0
+                ;;
+            -)
+                if (( INTERVAL > 120 )); then INTERVAL=120; else INTERVAL=$(( INTERVAL > 1 ? INTERVAL - 1 : 1 )); fi
+                FREEZE=0
+                ;;
+            F)
+                if (( FREEZE == 1 )); then
+                    FREEZE=0
+                    INTERVAL=1
+                else
+                    FREEZE=1
+                    INTERVAL="${INTERVAL_MAX}"
+                fi
+                ;;
+            c) SORT_TOGGLE "-%cpu" "%cpu"; OFFSET=0 ;;
+            C) SORT_TOGGLE "cmd" "-cmd"; SHOW_OPTS=1; OFFSET=0 ;;
+            N) SORT_TOGGLE "nice" "-nice"; OFFSET=0 ;;
+            u) SORT_TOGGLE "user" "-user"; OFFSET=0 ;;
+            p) SORT_TOGGLE "pid" "-pid"; OFFSET=0 ;;
+            P) SORT_TOGGLE "ppid" "-ppid"; OFFSET=0 ;;
+            m) SORT_TOGGLE "-rss" "rss"; OFFSET=0 ;;
+            M) CPU_MODE=$((1 - CPU_MODE)) ;;
+            $'\e[D') NEWBIE=1 ;;
+            $'\e[C') NEWBIE=0 ;;
+            $'\e[A') READ_DRAWN; SEL_STEP_KEY -1 ;;
+            $'\e[B') READ_DRAWN; SEL_STEP_KEY 1 ;;
+            $'\e[5')                        # PageUp : la vue seule, la sélection tient
+                READ_DRAWN
+                OFFSET=$(( OFFSET - (LIMIT > 1 ? LIMIT - 1 : 1) ))
+                (( OFFSET < 0 )) && OFFSET=0
+                ;;
+            $'\e[6')
+                READ_DRAWN
+                max_off=$(( TOTAL - LIMIT ))
+                (( max_off < 0 )) && max_off=0
+                OFFSET=$(( OFFSET + (LIMIT > 1 ? LIMIT - 1 : 1) ))
+                (( OFFSET > max_off )) && OFFSET=${max_off}
+                ;;
+            $'\e[H') OFFSET=0 ;;
+            $'\e[F')
+                READ_DRAWN
+                max_off=$(( TOTAL - LIMIT ))
+                (( max_off < 0 )) && max_off=0
+                OFFSET="${max_off}"
+                ;;
+            $'\e') SEL_PID=0 ;;             # Échap : on relâche la sélection
+            x) KILL_SELECTED TERM ;;        # fin douce : laisse le processus s'arrêter
+            X) KILL_SELECTED KILL ;;        # fin immédiate : pas de nettoyage
+            ''|$'\r'|$'\n'|d)               # Entrée ou d : détails du processus choisi
+                if (( SEL_PID > 0 )); then DETAILS_OVERLAY "${SEL_PID}"; fi
+                ;;
+            *) : ;;
+        esac
+        return 0
+    done
+}
+
+##############################################################################
+# Aide en sur-impression (touche H)
+#
+# Modale : dessinée par-dessus la vue, elle attend une touche, puis l'écran est
+# effacé et la boucle redessine l'image. Aucun coût par rafraîchissement : rien
+# n'est ajouté au chemin normal.
+##############################################################################
+# Remplissage à la largeur demandée en CARACTÈRES. printf '%-12s' compte des
+# octets : « Début / Fin » (12 octets, 11 caractères) sortait décalé d'une
+# colonne, et « ↑ / ↓ » de quatre.
+HPAD() {
+    local s="$1"
+    local -i w="$2" n
+    n=${#s}
+    if (( n >= w )); then
+        printf '%s' "${s:0:w}"
+    else
+        printf '%s%*s' "${s}" $(( w - n )) ''
+    fi
+    return 0
+}
+
+HELP_OVERLAY() {
+    local -a ktxt dtxt
+    local -i n cols keyw descw cellw bw bh rows x0 y0 r c idx inner pad avail
+    local -i longest=0 two=0
+    local desc
+    local kpad dpad line hint title hz bv tl tr bl br bg reset
+
+    ktxt=( 'c' 'C' 'm' 'p' 'P' 'N' 'u' 'M' 'o' 'k' 'h' 'f' '/' '- / +'
+           'F' '↑ / ↓' 'clic' 'double-clic' 'PgUp / PgDn' 'Début / Fin' 'Échap'
+           'Entrée / d' 'x / X' '← / →'
+           't' 'q' '?' )
+    dtxt=( 'trier par %CPU' 'trier par commande' 'trier par mémoire' 'trier par PID'
+           'trier par PPID' 'trier par nice' 'trier par utilisateur' '%CPU : cœur / machine'
+           'options des commandes' 'threads noyau (cycle)' 'entête on / off'
+           'pied de page on / off' 'filtrer (Entrée / Échap)'
+           'augmenter / diminuer le taux de rafraîchissement'
+           'gel / dégel' 'sélectionner (tenir = accélère)'
+           'sélectionner la ligne' 'détails du processus' "défiler d'une page" 
+           'premier / dernier' 'relâcher la sélection' 'détails du processus'
+           'TERM / KILL (y, ou dans les détails)' 'simplifié / étendu'
+           'arbre on / off' 'quitter' 'cette aide' )
+    n=${#ktxt[@]}
+
+    if (( NO_COLOR == 0 )); then
+        hz='─'; bv='│'; tl='┌'; tr='┐'; bl='└'; br='┘'
+        bg="${BgGris}"; reset="${Reset}"
+    else
+        hz='-'; bv='|'; tl='+'; tr='+'; bl='+'; br='+'
+        bg=''; reset=''
+    fi
+
+    # deux colonnes si la largeur le permet ; sinon, en hauteur insuffisante,
+    # on préfère deux colonnes serrées à une liste amputée de ses dernières
+    # lignes (c'est ainsi que « q » et « H » disparaissaient sur 22 lignes)
+    cols=1
+    if (( WIDTH >= 104 )); then
+        cols=2
+    elif (( WIDTH >= 56 && n > HEIGHT - 4 )); then
+        cols=2
+    fi
+    keyw=12
+    (( WIDTH < 70 )) && keyw=10
+    # La plus longue description décide de la disposition : en deux colonnes la
+    # colonne est forcément étroite (43 caractères à 120 colonnes de terminal) et
+    # « augmenter / diminuer le taux de rafraîchissement » finissait en ellipse.
+    # Une description tronquée ne dit plus rien : on repasse donc à une colonne
+    # quand la hauteur permet d'afficher les n lignes.
+    for desc in "${dtxt[@]}"; do
+        (( ${#desc} > longest )) && longest=${#desc}
+    done
+    if (( cols == 2 && n + 4 <= HEIGHT )); then
+        two=$(( (WIDTH - 5) / 2 - (keyw + 2) ))
+        (( two > 50 )) && two=50
+        (( two < longest )) && cols=1
+    fi
+    # tout dérive de la largeur disponible : une largeur de description
+    # forcée vers le haut faisait déborder la bordure droite d'un caractère
+    avail=$(( WIDTH - 2 - 3 * (cols - 1) ))
+    descw=$(( avail / cols - (keyw + 2) ))
+    (( descw < 8 )) && descw=8
+    # plafond : au-delà, la description la plus longue (le taux de
+    # rafraîchissement, 48 caractères) est tronquée avec un « … ». Le plafond
+    # ne peut pas déborder : descw est déjà borné par avail/cols juste au-dessus.
+    (( descw > 50 )) && descw=50
+    cellw=$(( keyw + 2 + descw ))
+    bw=$(( 2 + cellw * cols + 3 * (cols - 1) ))
+    rows=$(( (n + cols - 1) / cols ))
+    (( rows + 4 > HEIGHT )) && rows=$(( HEIGHT - 4 ))
+    (( rows < 1 )) && rows=1
+    bh=$(( rows + 3 ))
+
+    x0=$(( (WIDTH - bw) / 2 + 1 ))
+    y0=$(( (HEIGHT - bh) / 2 + 1 ))
+    (( x0 < 1 )) && x0=1
+    (( y0 < 1 )) && y0=1
+    inner=$(( bw - 2 ))
+
+    # bord supérieur, titre inclus
+    title=' AIDE — raccourcis '
+    (( ${#title} > inner )) && title=' AIDE '
+    line="${tl}${hz}${title}"
+    while (( ${#line} < bw - 1 )); do line+="${hz}"; done
+    line+="${tr}"
+    printf '%s\033[%d;%dH%s%s%s\033[K' "${bg}" "${y0}" "${x0}" "${Blanc}" "${line}" "${reset}"
+
+    for ((r = 0; r < rows; r++)); do
+        line="${bv}"
+        for ((c = 0; c < cols; c++)); do
+            idx=$(( c * rows + r ))
+            (( c > 0 )) && line+='   '
+            if (( idx < n )); then
+                kpad=$(HPAD "${ktxt[idx]}" "${keyw}")
+                desc="${dtxt[idx]}"
+                if (( ${#desc} > descw )); then
+                    desc="${desc:0:$(( descw - 1 ))}…"
+                fi
+                dpad=$(HPAD "${desc}" "${descw}")
+                line+=" ${BleuBold}${kpad}${ResetFg} ${dpad}"
+            else
+                line+=$(HPAD '' "${cellw}")
+            fi
+        done
+        line+="${bv}"
+        printf '%s\033[%d;%dH%s%s%s\033[K' "${bg}" "$(( y0 + 1 + r ))" "${x0}" "${Blanc}" "${line}" "${reset}"
+    done
+
+    hint='une touche pour fermer'
+    pad=$(( (inner - ${#hint}) / 2 ))
+    (( pad < 1 )) && pad=1
+    line="${bv}$(printf '%*s' "${pad}" '')${Gris}${hint}${ResetFg}"
+    line+=$(HPAD '' "$(( inner - pad - ${#hint} ))")
+    line+="${bv}"
+    printf '%s\033[%d;%dH%s%s%s\033[K' "${bg}" "$(( y0 + 1 + rows ))" "${x0}" "${Blanc}" "${line}" "${reset}"
+
+    line="${bl}"
+    for ((i = 0; i < inner; i++)); do line+="${hz}"; done
+    line+="${br}"
+    printf '%s\033[%d;%dH%s%s%s\033[K' "${bg}" "$(( y0 + rows + 2 ))" "${x0}" "${Blanc}" "${line}" "${reset}"
+
+    # modale : on attend une touche (n'importe laquelle)
+    MODAL_KEY
+
+    # pas d'effacement : la boucle redessine toute la trame juste après (même
+    # raison que DET_CLOSE, un écran vide intermédiaire se voit)
+    return 0
+}
+
+##############################################################################
+# Boîtes : détails d'un processus et confirmation de kill
+##############################################################################
+# Les deux boîtes partagent le même collecteur de /proc (aucun fork) et le même
+# dessin : DET_INIT prépare la géométrie, PROC_INFO remplit les lignes,
+# DET_DRAW dessine (et allume le drapeau GEL, la liste étant figée), DET_CLOSE
+# restaure l'état et efface. Une touche ferme, la boucle redessine.
+
+# Taille en Kio -> SIZE_STR (printf -v : pas de $( ), donc pas de fork)
+FMT_SIZE() {
+    local -i kb="${1:-0}"
+    (( kb < 0 )) && kb=0
+    if (( kb >= 1048576 )); then
+        printf -v SIZE_STR '%d Gio' $(( kb / 1048576 ))
+    elif (( kb >= 1024 )); then
+        printf -v SIZE_STR '%d Mio' $(( kb / 1024 ))
+    else
+        printf -v SIZE_STR '%d Kio' "${kb}"
+    fi
+    return 0
+}
+
+# Durée en secondes -> AGE_STR
+FMT_AGE() {
+    local -i s="${1:-0}" d=0 h=0 m=0
+    (( s < 0 )) && s=0
+    d=$(( s / 86400 ))
+    h=$(( (s % 86400) / 3600 ))
+    m=$(( (s % 3600) / 60 ))
+    if (( d > 0 )); then
+        printf -v AGE_STR '%dj %02dh%02d' "${d}" "${h}" "${m}"
+    elif (( h > 0 )); then
+        printf -v AGE_STR '%dh %02dm' "${h}" "${m}"
+    elif (( m > 0 )); then
+        printf -v AGE_STR '%dm %02ds' "${m}" $(( s % 60 ))
+    else
+        printf -v AGE_STR '%ds' "${s}"
+    fi
+    return 0
+}
+
+# Ajoute une ligne « label  valeur » ; largeur visible dans DET_W.
+DET_PUSH() {
+    local -i lw=14 vw
+    local l="$1" v="$2" row
+    vw=$(( DET_INNER - lw - 4 ))
+    (( vw < 8 )) && vw=8
+    (( ${#v} > vw )) && v="${v:0:$(( vw - 1 ))}…"
+    (( ${#l} > lw )) && l="${l:0:lw}"
+    while (( ${#l} < lw )); do l+=' '; done
+    printf -v row '%s%s%s %s' "${DET_GRIS}" "${l}" "${DET_RST}" "${v}"
+    DET_ROWS+=("${row}")
+    DET_W+=("$(( lw + 1 + ${#v} ))")
+    return 0
+}
+
+# Ligne brute déjà mise en forme : DET_RAW TEXTE LARGEUR_VISIBLE
+DET_RAW() {
+    DET_ROWS+=("$1")
+    DET_W+=("${2:-0}")
+    return 0
+}
+
+# Ligne de commande : 2 espaces d'indentation, toute la largeur disponible
+DET_CMD() {
+    local v="$1" row
+    local -i vw=$(( DET_INNER - 3 ))
+    (( vw < 8 )) && vw=8
+    (( ${#v} > vw )) && v="${v:0:$(( vw - 1 ))}…"
+    printf -v row '  %s' "${v}"
+    DET_ROWS+=("${row}")
+    DET_W+=("$(( 2 + ${#v} ))")
+    return 0
+}
+
+# Ligne de séparation pleine largeur
+DET_SEP() {
+    local line=''
+    local -i i
+    for (( i = 0; i < DET_INNER; i++ )); do line+="${DET_HZ}"; done
+    DET_ROWS+=("${DET_GRIS}${line}${DET_RST}")
+    DET_W+=("${DET_INNER}")
+    return 0
+}
+
+# Décor et géométrie : largeur de la boîte selon le terminal
+DET_INIT() {
+    local -i inner
+    if (( NO_COLOR == 0 )); then
+        DET_HZ='─'; DET_BV='│'; DET_TL='┌'; DET_TR='┐'; DET_BL='└'; DET_BR='┘'
+        DET_BG="${BgGris}"; DET_RS="${Reset}"
+        DET_GRIS="${Gris}"; DET_RST="${ResetFg}"
+    else
+        DET_HZ='-'; DET_BV='|'; DET_TL='+'; DET_TR='+'; DET_BL='+'; DET_BR='+'
+        DET_BG=''; DET_RS=''; DET_GRIS=''; DET_RST=''
+    fi
+    inner=$(( WIDTH - 6 ))
+    (( inner > 96 )) && inner=96
+    (( inner < 30 )) && inner=30
+    DET_INNER="${inner}"
+    DET_NAME='?'
+    DET_HINT=''
+    return 0
+}
+
+# Remplit DET_ROWS pour un PID, sans dépasser $2 lignes. -> DET_NAME
+PROC_INFO() {
+    local -i pid="${1:-0}" budget="${2:-40}" i=0 vw=0 present=1 pushed=0
+    local pdir="/proc/${pid}"
+    local -a av=() sf=()
+    local key val statline rest name='?' state='?' ppid='-' threads='-' nice='-'
+    local uid='' user='?' vmrss='' vmsize='' vmswap=''
+    local -i io_r=-1 io_w=-1 oom=-1 oomadj=-1 up=0 started=0
+    local -i pss=-1 pss_anon=-1 pss_file=-1 pss_shm=-1
+    local pss_s='' anon_s='' file_s='' shm_s='' pss_txt='' uptime_str=''
+    local cg='' arg='' joined=''
+
+    DET_ROWS=()
+    DET_W=()
+
+    if [[ ! -r "${pdir}/stat" ]]; then
+        present=0
+        DET_PUSH 'processus' "PID ${pid} : plus présent"
+    fi
+
+    if (( present == 1 )); then
+        while IFS=$'\t' read -r key val; do
+            case "${key}" in
+                Name:) name="${val}" ;;
+                State:) state="${val}" ;;
+                PPid:) ppid="${val}" ;;
+                Uid:) uid="${val%%$'\t'*}" ;;
+                VmRSS:) vmrss="${val// /}"; vmrss="${vmrss%kB}" ;;
+                VmSize:) vmsize="${val// /}"; vmsize="${vmsize%kB}" ;;
+                VmSwap:) vmswap="${val// /}"; vmswap="${vmswap%kB}" ;;
+                *) : ;;
+            esac
+        done < "${pdir}/status"
+
+        # /proc/<pid>/stat, champs après « (comm) » : le champ N du noyau est à
+        # l'indice N-3 -> sf[1]=ppid, sf[16]=nice, sf[17]=threads,
+        # sf[19]=starttime (le champ 22, en ticks depuis le démarrage)
+        if IFS= read -r statline < "${pdir}/stat"; then
+            rest="${statline##*) }"
+            read -r -a sf <<< "${rest}"
+            if (( ${#sf[@]} > 18 )); then
+                nice="${sf[16]}"
+                # USER_HZ = 100 sur toutes les architectures courantes de Linux ;
+                # /proc/uptime rend « 333924.28 » : lire dans une chaîne
+                IFS=' ' read -r uptime_str _ < /proc/uptime || true
+                up=$(( ${uptime_str%%.*} ))
+                started=$(( up - sf[19] / 100 ))
+            fi
+        fi
+
+        # PSS : la seule mesure qui répartit les pages partagées entre les
+        # processus. procfs annonce 0444, mais le refus (contrôle ptrace) tombe
+        # à l'ouverture : d'où le groupe, dont la stderr est redirigée avant le
+        # fichier — un 2>/dev/null sur la boucle ne couvre pas cet échec.
+        if [[ -r "${pdir}/smaps_rollup" ]]; then
+            {
+                while IFS=: read -r key val; do
+                    case "${key}" in
+                        Pss) pss_s="${val// /}" ;;
+                        Pss_Anon) anon_s="${val// /}" ;;
+                        Pss_File) file_s="${val// /}" ;;
+                        Pss_Shmem) shm_s="${val// /}" ;;
+                        *) : ;;
+                    esac
+                done
+            } 2>/dev/null < "${pdir}/smaps_rollup" || true
+        fi
+        # chaîne intermédiaire : affecter « 288872kB » à une variable entière
+        # déclencherait son évaluation arithmétique
+        pss_s="${pss_s%kB}"; anon_s="${anon_s%kB}"
+        file_s="${file_s%kB}"; shm_s="${shm_s%kB}"
+        [[ "${pss_s}" =~ ^[0-9]+$ ]] && pss="${pss_s}"
+        [[ "${anon_s}" =~ ^[0-9]+$ ]] && pss_anon="${anon_s}"
+        [[ "${file_s}" =~ ^[0-9]+$ ]] && pss_file="${file_s}"
+        [[ "${shm_s}" =~ ^[0-9]+$ ]] && pss_shm="${shm_s}"
+
+        if [[ -r "${pdir}/io" ]]; then
+            {
+                while IFS=: read -r key val; do
+                    case "${key}" in
+                        read_bytes) io_r="${val// /}" ;;
+                        write_bytes) io_w="${val// /}" ;;
+                        *) : ;;
+                    esac
+                done
+            } 2>/dev/null < "${pdir}/io" || true
+        fi
+
+        if IFS= read -r val < "${pdir}/oom_score" 2>/dev/null; then oom="${val// /}"; fi
+        if IFS= read -r val < "${pdir}/oom_score_adj" 2>/dev/null; then oomadj="${val// /}"; fi
+        # /proc/<pid>/cgroup : « 0::/chemin » (deux points, hiérarchie vide)
+        if IFS= read -r val < "${pdir}/cgroup" 2>/dev/null; then cg="${val##*:}"; fi
+
+        # nom de l'utilisateur depuis /etc/passwd : évite getent/id (un fork)
+        if [[ -n "${uid}" ]]; then
+            while IFS=: read -r key _ val _; do
+                if [[ "${val}" == "${uid}" ]]; then user="${key}"; break; fi
+            done < /etc/passwd
+        fi
+
+        if [[ -r "${pdir}/cmdline" ]]; then
+            mapfile -d '' -t av < "${pdir}/cmdline" 2>/dev/null || true
+        fi
+        (( ${#av[@]} == 0 )) && av=("${name}")
+        DET_NAME="${name}"
+
+        DET_PUSH 'PID' "${pid}"
+        DET_PUSH 'PPID' "${ppid}"
+        DET_PUSH 'utilisateur' "${user}"
+        DET_PUSH 'état' "${state}"
+        DET_PUSH 'threads' "${sf[17]:-${threads}}"
+        DET_PUSH 'nice' "${nice}"
+        if [[ -n "${vmrss}" ]]; then
+            FMT_SIZE "${vmrss}"
+            DET_PUSH 'mémoire (RSS)' "${SIZE_STR}"
+        fi
+        if (( pss >= 0 )); then
+            FMT_SIZE "${pss}"
+            pss_txt="${SIZE_STR}"
+            if (( pss_anon >= 0 && pss_file >= 0 )); then
+                FMT_SIZE "${pss_anon}"
+                anon_s="${SIZE_STR}"
+                FMT_SIZE "${pss_file}"
+                file_s="${SIZE_STR}"
+                pss_txt+=" (anon ${anon_s} · fich. ${file_s}"
+                if (( pss_shm > 0 )); then
+                    FMT_SIZE "${pss_shm}"
+                    shm_s="${SIZE_STR}"
+                    pss_txt+=" · shm ${shm_s}"
+                fi
+                pss_txt+=')'
+            fi
+            DET_PUSH 'mémoire (PSS)' "${pss_txt}"
+        fi
+        if [[ -n "${vmsize}" ]]; then
+            FMT_SIZE "${vmsize}"
+            DET_PUSH 'virtuelle' "${SIZE_STR}"
+        fi
+        if [[ -n "${vmswap}" ]]; then
+            FMT_SIZE "${vmswap}"
+            DET_PUSH 'swap' "${SIZE_STR}"
+        fi
+        if (( io_r >= 0 )); then
+            FMT_SIZE $(( io_r / 1024 ))
+            DET_PUSH 'E/S lues' "${SIZE_STR}"
+            FMT_SIZE $(( io_w / 1024 ))
+            DET_PUSH 'E/S écrites' "${SIZE_STR}"
+        fi
+        if (( oom >= 0 )); then
+            DET_PUSH 'OOM score' "${oom} / 1000 (adj ${oomadj})"
+        fi
+        if (( started > 0 )); then
+            FMT_AGE "${started}"
+            DET_PUSH 'âge' "${AGE_STR}"
+        fi
+
+        if [[ -n "${cg}" ]]; then
+            DET_SEP
+            DET_PUSH 'cgroup' "${cg}"
+        fi
+
+        DET_SEP
+        # la commande est en dernier : une boîte trop haute coupe les
+        # continuations, jamais le début de la commande
+        vw=$(( DET_INNER - 3 ))
+        (( vw < 8 )) && vw=8
+        joined=''
+        for arg in "${av[@]}"; do
+            # un argument peut contenir des retours à la ligne (python -c) : ils
+            # casseraient le cadre, on les ramène à des espaces
+            arg="${arg//$'\n'/ }"
+            arg="${arg//$'\r'/ }"
+            arg="${arg//$'\t'/ }"
+            while [[ "${arg}" == *'  '* ]]; do arg="${arg//'  '/' '}"; done
+            if (( ${#joined} + ${#arg} + 1 > vw )); then
+                if (( pushed >= 3 )); then
+                    DET_CMD "${joined} …"
+                    joined=''
+                    break
+                fi
+                DET_CMD "${joined}"
+                pushed=$(( pushed + 1 ))
+                joined="${arg}"
+            else
+                joined="${joined:+${joined} }${arg}"
+            fi
+        done
+        if [[ -n "${joined}" ]]; then
+            DET_CMD "${joined}"
+        fi
+    fi
+
+    # budget de hauteur : on coupe la queue (continuations de commande, cgroup)
+    # plutôt que de laisser la boîte déborder
+    if (( ${#DET_ROWS[@]} > budget )); then
+        for (( i = ${#DET_ROWS[@]} - 1; i >= budget - 1; i-- )); do
+            unset 'DET_ROWS[i]' 'DET_W[i]'
+        done
+        DET_ROWS=("${DET_ROWS[@]}")
+        DET_W=("${DET_W[@]}")
+        DET_RAW "  …" 3
+    fi
+    return 0
+}
+
+# Dessine la boîte (titre en $1) sans lire de touche ; allume le drapeau GEL.
+DET_DRAW() {
+    local title="$1" line spaces
+    local -i i pad rows bh bw x0 y0 inner sx hintrows
+    inner="${DET_INNER}"
+    rows=${#DET_ROWS[@]}
+    (( rows < 1 )) && rows=1
+    hintrows=0
+    [[ -n "${DET_HINT}" ]] && hintrows=1
+    bh=$(( rows + 2 + hintrows ))
+    (( bh > HEIGHT )) && bh=$(( HEIGHT ))
+    bw=$(( inner + 2 ))
+    x0=$(( (WIDTH - bw) / 2 + 1 ))
+    y0=$(( (HEIGHT - bh) / 2 + 1 ))
+    (( x0 < 1 )) && x0=1
+    (( y0 < 1 )) && y0=1
+
+    # la boîte bloque la boucle : la liste est figée, on allume le drapeau GEL
+    # du statut (restauré par DET_CLOSE) ; si la boîte occupe la première ligne,
+    # le drapeau va dans le titre
+    DET_FREEZE_SAVE=${FREEZE}
+    FREEZE=1
+    STATUS_BUILD
+    if (( y0 == 1 )); then
+        title+='· GEL '
+    fi
+
+    (( ${#title} > inner )) && title=" ${DET_NAME} "
+    (( ${#title} > inner )) && title=' … '
+    line="${DET_TL}${DET_HZ}${title}"
+    while (( ${#line} < bw - 1 )); do line+="${DET_HZ}"; done
+    line+="${DET_TR}"
+    printf '%s\033[%d;%dH%s%s%s\033[K' "${DET_BG}" "${y0}" "${x0}" "${Blanc}" "${line}" "${DET_RS}"
+
+    for (( i = 0; i < rows; i++ )); do
+        pad=$(( inner - DET_W[i] ))
+        (( pad < 0 )) && pad=0
+        printf -v spaces '%*s' "${pad}" ''
+        printf '%s\033[%d;%dH%s%s%s' "${DET_BG}" "$(( y0 + 1 + i ))" "${x0}" \
+            "${Blanc}" "${DET_BV}${DET_ROWS[i]}${spaces}${DET_BV}" "${DET_RS}"
+    done
+
+    if (( hintrows == 1 )); then
+        pad=$(( (inner - ${#DET_HINT}) / 2 ))
+        (( pad < 1 )) && pad=1
+        printf -v spaces '%*s' "${pad}" ''
+        # dernière ligne (x / X, y… ) en gras : c'est l'action à retenir
+        line="${DET_BV}${spaces}${Gras}${DET_GRIS}${DET_HINT}${DET_RST}"
+        printf -v spaces '%*s' "$(( inner - pad - ${#DET_HINT} ))" ''
+        line+="${spaces}${DET_BV}"
+        printf '%s\033[%d;%dH%s%s%s' "${DET_BG}" "$(( y0 + 1 + rows ))" "${x0}" "${Blanc}" "${line}" "${DET_RS}"
+    fi
+
+    line="${DET_BL}"
+    for (( i = 0; i < inner; i++ )); do line+="${DET_HZ}"; done
+    line+="${DET_BR}"
+    printf '%s\033[%d;%dH%s%s%s' "${DET_BG}" "$(( y0 + rows + 1 + hintrows ))" "${x0}" "${Blanc}" "${line}" "${DET_RS}"
+
+    if (( y0 > 1 )); then
+        sx=$(( WIDTH - STATUSW + 1 ))
+        (( sx < 1 )) && sx=1
+        printf '\033[%d;%dH%s\033[K' "$(( HEADER == 1 ? 1 : HEIGHT ))" "${sx}" "${status_c}${Reset}"
+    fi
+    return 0
+}
+
+# Restaure l'état et efface : la boucle redessine aussitôt.
+# Ferme la boîte : l'effacement de l'écran est inutile (la trame suivante
+# réécrit toutes les lignes, [H puis [J), et il produisait un écran vide
+# entre deux images — visible quand une boîte en remplace une autre.
+DET_CLOSE() {
+    FREEZE=${DET_FREEZE_SAVE}
+    STATUS_BUILD
+    return 0
+}
+
+# Détails d'un processus (Entrée, d ou double-clic) — lecture seule, sauf
+# x/X qui terminent le processus affiché (mêmes garde-fous que la liste : PID 1,
+# psim et ses parents). La boîte de confirmation remplace celle des détails.
+DETAILS_OVERLAY() {
+    local -i pid="${1:-0}"
+    local sig=''
+    DET_INIT
+    PROC_INFO "${pid}" $(( HEIGHT - 3 ))
+    DET_HINT='x = TERM   ·   X = KILL   ·   une autre touche ferme'
+    DET_DRAW " DÉTAILS — ${pid} ${DET_NAME} "
+    MODAL_KEY
+    DET_CLOSE
+    case "${MODAL_KEY}" in
+        x) sig='TERM' ;;
+        X) sig='KILL' ;;
+        *) return 0 ;;
+    esac
+    # la confirmation doit s'ouvrir sur le tableau, pas sur un écran vide :
+    # DET_CLOSE efface, DRAW_FRAME remet l'image, puis la boîte se dessine dessus
+    DRAW_FRAME
+    SEL_PID=${pid}
+    KILL_SELECTED "${sig}"
+    return 0
+}
+
+# Confirmation de kill (x / X) : même boîte, question en dernière ligne
+CONFIRM_KILL() {
+    local sig="$1"
+    local -i pid="${2:-0}"
+    local hk='' q=''
+    ASKED=0
+    DET_INIT
+    # deux lignes réservées : la question et la ligne d'aide
+    PROC_INFO "${pid}" $(( HEIGHT - 5 ))
+    DET_SEP
+    q=" envoyer ${sig} à ${pid} ?"
+    DET_RAW "${RougeBold}${q}${DET_RST}" "${#q}"
+    DET_HINT='y = envoyer   ·   toute autre touche = annuler'
+    DET_DRAW " TERMINER — ${pid} ${DET_NAME} "
+    MODAL_KEY
+    hk="${MODAL_KEY}"
+    DET_CLOSE
+    if [[ "${hk}" == 'y' || "${hk}" == 'Y' ]]; then ASKED=1; fi
+    return 0
+}
+
+# Nom court (comm) du processus -> CMDNAME
+COMM_OF() {
+    local p="${1:-0}"
+    CMDNAME='?'
+    if [[ -r "/proc/${p}/comm" ]]; then
+        IFS= read -r CMDNAME < "/proc/${p}/comm" || CMDNAME='?'
+    fi
+    return 0
+}
+
+# Le PID est-il psim ou l'un de ses ascendants ? -> ISANC
+IS_ANCESTOR() {
+    local -i p=${SELF_PID:-0} n=0
+    local -a sf=()
+    local statline rest
+    ISANC=0
+    while (( p > 1 && n < 64 )); do
+        if (( p == ${1:-0} )); then ISANC=1; return 0; fi
+        [[ -r "/proc/${p}/stat" ]] || break
+        IFS= read -r statline < "/proc/${p}/stat" || break
+        rest="${statline##*) }"
+        read -r -a sf <<< "${rest}"
+        (( ${#sf[@]} < 2 )) && break
+        p=${sf[1]}
+        n=$(( n + 1 ))
+    done
+    return 0
+}
+
+# Message d'une ligne, en bas de l'écran : la trame suivante le remplace.
+FLASH() {
+    local msg="$1"
+    (( ${#msg} > WIDTH - 2 )) && msg="${msg:0:$(( WIDTH - 3 ))}…"
+    printf '\033[%d;1H\033[K%s%s%s' "${HEIGHT}" "${RougeBold}" "${msg}" "${Reset}"
+    return 0
+}
+
+KILL_SELECTED() {
+    local sig="$1"
+    local -i pid=${SEL_PID:-0}
+    KILL_OK=0
+
+    if (( pid <= 0 )); then
+        FLASH ' aucune sélection : ↑/↓ puis x (TERM) ou X (KILL) '
+        return 0
+    fi
+    if (( pid == 1 )); then
+        FLASH ' refus : PID 1 est init, on n'"'"'y touche pas '
+        return 0
+    fi
+    COMM_OF "${pid}"
+    IS_ANCESTOR "${pid}"
+    if (( ISANC == 1 )); then
+        FLASH " refus : ${pid} (${CMDNAME}) est psim ou l'un de ses parents "
+        return 0
+    fi
+    CONFIRM_KILL "${sig}" "${pid}"
+    if (( ASKED == 0 )); then
+        FLASH " annulé : rien envoyé à ${pid} "
+        return 0
+    fi
+    kill -s "${sig}" "${pid}" 2>/dev/null || KILL_OK=1
+    if (( KILL_OK == 0 )); then
+        FLASH " ${sig} envoyé à ${pid} (${CMDNAME}) "
+    elif [[ -d "/proc/${pid}" ]]; then
+        FLASH " échec ${sig} ${pid} (${CMDNAME}) : permission refusée "
+    else
+        FLASH " ${pid} (${CMDNAME}) avait déjà disparu "
+    fi
+    return 0
+}
+
+##############################################################################
+# Modes
+##############################################################################
+# Une trame complète : bornes de la fenêtre, ps+awk, tableau, statut. Seul
+# endroit qui décide de la géométrie, pour que la boucle et la reprise après une
+# boîte (détails -> confirmation) dessinent exactement la même image.
+DRAW_FRAME() {
+    local -i bar=0 max_off
+    # le statut vit dans l'entête ; une ligne n'est réservée que si l'entête est
+    # masquée, pour qu'il reste visible
+    (( HEADER == 0 )) && bar=1
+
+    LIMIT=$(( HEIGHT - HEADER - FOOTER - bar ))
+    (( LIMIT < 1 )) && LIMIT=1
+
+    READ_DRAWN
+    max_off=$(( TOTAL - LIMIT ))
+    (( max_off < 0 )) && max_off=0
+    (( OFFSET > max_off )) && OFFSET="${max_off}"
+
+    printf '\033[H'
+    RENDER 1 "${LIMIT}" "${HEADER}" "${FOOTER}"
+    if (( bar == 1 )); then
+        # pas d'effacement ici : la ligne du statut est réécrite par-dessus
+        # (un \033[J la blanchirait avant de la redessiner -> scintillement)
+        printf '\n'
+        PRINT_STATUS
+    else
+        # pas de ligne de statut : on nettoie sous le pied de page
+        printf '\033[J'
+    fi
+    return 0
+}
+
+RUN_DYNAMIC() {
+    ALT=1
+    STTY_SAVE=$(stty -g 2>/dev/null || true)
+    [[ -z "${STTY_SAVE}" ]] || stty -echo 2>/dev/null || true
+    printf '\033[?25l\033[?1049h\033[?1000h\033[?1006h\033[H'
+    trap 'exit 130' INT
+    trap 'exit 143' TERM HUP
+    trap 'exit 131' QUIT PIPE
+    # un redimensionnement doit être vu tout de suite : sinon, gelé (intervalle
+    # de 3599 s), la mise en page reste fausse pendant près d'une heure.
+    WINCH=0
+    trap 'WINCH=1' WINCH
+
+    while :; do
+        if (( WINCH == 1 )); then
+            WINCH=0
+            READ_SIZE 1
+        fi
+        if (( WIDTH < MIN_W || HEIGHT < MIN_H )); then
+            RESTORE_SCREEN
+            ERR "terminal trop petit (${WIDTH}x${HEIGHT}), minimum ${MIN_W}x${MIN_H}."
+            QUIT 1
+        fi
+        (( WIDTH < THIN_W )) && NEWBIE=1
+
+        DRAW_FRAME
+        HANDLE_KEY
+    done
+}
+
+RUN_STATIC() {
+    READ_SIZE
+    (( WIDTH < THIN_W )) && NEWBIE=1
+    RENDER "${TTY}" "${LIMIT}" "${HEADER}" "${FOOTER}" 0
+    return 0
+}
+
+##############################################################################
+# Journal / statistiques
+##############################################################################
+ROTATE_LOG() {
+    local -i size
+    [[ -f "${LOG_FILE}" ]] || return 0
+    size=$(wc -c < "${LOG_FILE}" 2>/dev/null || printf '0')
+    [[ "${size}" =~ ^[0-9]+$ ]] || size=0
+    (( size > LOG_MAX )) && mv -f "${LOG_FILE}" "${LOG_FILE}.1" 2>/dev/null || true
+    return 0
+}
+
+WRITE_LOG() {
+    local psver awkver
+    (( LOG == 1 )) && [[ -n "${LOG_FILE}" ]] || return 0
+    ROTATE_LOG
+    psver=$("${PS_BIN}" --version 2>/dev/null | head -n 1 || true)
+    awkver=$("${AWK_BIN}" --version 2>/dev/null | head -n 1 || true)
+    [[ -n "${awkver}" ]] || awkver=$("${AWK_BIN}" -W version 2>/dev/null | head -n 1 || true)
+    {
+        printf '=== %s — %s %s ===\n' "$(date '+%Y-%m-%d %H:%M:%S')" "${NAME}" "${VER}"
+        printf 'durée       : %ss\n' "${SECONDS}"
+        printf 'utilisateur : %s\n' "${ME}"
+        printf 'terminal    : %sx%s (%s)\n' "${WIDTH}" "${HEIGHT}" "${TERM:-?}"
+        printf 'ps          : %s (%s)\n' "${PS_BIN}" "${psver}"
+        printf 'awk         : %s (%s)\n' "${AWK_BIN}" "${awkver}"
+        printf 'tri         : %s | filtre : %s\n' "${SORT}" "${FILTER}"
+        printf 'newbie      : %s | noyau : %s | options : %s\n' "${NEWBIE}" "${KERNEL}" "${SHOW_OPTS}"
+        printf 'entête      : %s | pied : %s | couleur : %s\n' \
+            "${HEADER}" "${FOOTER}" "$(( NO_COLOR == 0 ? 1 : 0 ))"
+        printf '\n'
+    } >> "${LOG_FILE}" 2>/dev/null || true
+    chmod 600 "${LOG_FILE}" 2>/dev/null || true
+    return 0
+}
+
+
+##############################################################################
+# Sortie
+##############################################################################
+ON_EXIT() {
+    local -i rc=$?
+    if (( CLEANED == 1 )); then return 0; fi
+    CLEANED=1
+    RESTORE_SCREEN
+    if (( SESSION == 1 )); then
+        [[ -z "${DRAW_FILE}" ]] || rm -f "${DRAW_FILE}" 2>/dev/null || true
+        WRITE_LOG
+    fi
+    return "${rc}"
+}
+
+# Valide le motif avec le moteur qui l'exécutera (awk), et non grep :
+# les deux dialectes diffèrent (\b, \w, \s...). Le motif est passé par
+# l'environnement, exactement comme lors du rendu (aucune interprétation de \ ).
+VALIDATE_FILTER() {
+    local -i rc=0
+    PSIM_FILTER="${FILTER}" "${AWK_BIN}" \
+        'BEGIN { f = ENVIRON["PSIM_FILTER"]; if (f != "" && "" !~ f) exit 0 }' \
+        >/dev/null 2>&1 || rc=$?
+    if (( rc != 0 )); then
+        ERR "filtre invalide (expression régulière) : ${FILTER}"
+        return 1
+    fi
+
+    # piège classique : dans gawk, \b est un backspace (grep : limite de mot)
+    if [[ "${FILTER}" == *'\b'* ]]; then
+        local ver
+        ver=$("${AWK_BIN}" --version 2>/dev/null | head -n 1 || true)
+        if [[ "${ver}" == *"GNU Awk"* ]]; then
+            WARN "dans gawk, « \\b » est un backspace : utilisez « \\y » pour une limite de mot"
+        fi
+    fi
+    return 0
+}
+
+##############################################################################
+# Main
+##############################################################################
+MAIN() {
+    TTY=0
+    [[ -t 1 ]] && TTY=1
+    STDIN_TTY=0
+    [[ -t 0 ]] && STDIN_TTY=1
+
+    # shellcheck disable=SC2310  # le message est déjà affiché par INIT_PATHS
+    INIT_PATHS || QUIT 1
+    CONFIG_DEFAULTS
+    DEFINE_COLORS
+    CHECK_DEPS
+    COLLECT_EXCLUDES
+    SCAN_NO_CONFIG "$@"
+    # if sur l'arithmétique seule : LOAD_CONFIG appelé dans une condition
+    # désactiverait set -e pour toute la fonction (SC2310)
+    if (( NO_CONFIG == 0 )); then
+        LOAD_CONFIG
+    fi
+    DEFINE_COLORS
+    PARSE_ARGS "$@"
+    DEFINE_COLORS
+
+    if [[ -n "${FILTER}" ]]; then
+        # volontaire : le code de retour pilote le message d'erreur déjà affiché
+        # shellcheck disable=SC2310
+        VALIDATE_FILTER || QUIT 2
+    fi
+
+    READ_SIZE
+    if (( STATIC == 1 )); then
+        RUN_STATIC
+        return 0
+    fi
+
+    # session interactive seulement : un « psim | grep » ne doit ni écrire le
+    # journal (~400 o et ~16 ms par appel) ni créer le cache
+    PREPARE_CACHE
+    SESSION=1
+    trap ON_EXIT EXIT
+    RUN_DYNAMIC
+    return 0
+}
+
+MAIN "$@"
