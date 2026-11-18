@@ -28,7 +28,7 @@
 ##############################################################################
 set -euo pipefail
 
-readonly VER="1.7.0"
+readonly VER="1.7.1"
 readonly NAME="${0##*/}"
 readonly CONF_NAME="psim"       # config et cache : ~/.config/psim et ~/.cache/psim
 readonly SELF_PID="${BASHPID:-$$}"
@@ -258,6 +258,7 @@ ${Vert}OPTIONS${Reset}
    ${Bleu}-u, --user${Reset}             tri par propriétaire
    ${Bleu}-C, --cmd${Reset}              tri par commande
    ${Bleu}-t, --tree${Reset}             hiérarchie des processus (arbre des ppid)
+   ${Bleu}    --no-tree${Reset}          annuler --tree
    ${Bleu}-n, --newbie${Reset}           affichage simplifié (PID USER MiB %CPU CMD)
    ${Bleu}    --normal${Reset}           colonnes complètes (annule --newbie)
    ${Bleu}-k, --kernel${Reset}           inclure les threads noyau
@@ -420,6 +421,7 @@ PARSE_ARGS() {
             -u|--user)  SORT="user";  shift ;;
             -C|--cmd)   SORT="cmd";   shift ;;
             -t|--tree) TREE=1; shift ;;
+            --no-tree) TREE=0; shift ;;
             -n|--newbie) NEWBIE=1; shift ;;
             --normal) NEWBIE=0; shift ;;
             -k|--kernel) k=1; shift ;;

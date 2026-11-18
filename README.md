@@ -5,7 +5,7 @@ filtre, arbre des processus, et un mode dynamique avec raccourcis clavier.
 Le même binaire reste utilisable dans un pipe ou une redirection, sans séquence
 ANSI ni troncature.
 
-Version 1.7.0 — GPLv3. Auteur original : jotenakis.
+Version 1.7.1 — GPLv3. Auteur original : jotenakis.
 
 ## Fonctionnalités
 
@@ -90,6 +90,7 @@ psim [OPTIONS] [--N]
 | `-u`, `--user` | tri par propriétaire |
 | `-C`, `--cmd` | tri par commande |
 | `-t`, `--tree` | hiérarchie des processus (arbre des ppid) |
+| `--no-tree` | annuler `--tree` (y compris `TREE=1` de la configuration) |
 | `-n`, `--newbie` | affichage simplifié (PID USER MiB %CPU CMD) |
 | `--normal` | colonnes complètes (annule `--newbie`) |
 | `-k`, `--kernel` | inclure les threads noyau |

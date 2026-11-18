@@ -1,7 +1,7 @@
 .\" psim(1) -- page de manuel française
 .\" Copyright (C) 2026 jotenakis
 .\" SPDX-License-Identifier: GPL-3.0-or-later
-.TH PSIM 1 "2026-11-18" "psim 1.7.0" "Commandes utilisateur"
+.TH PSIM 1 "2026-11-18" "psim 1.7.1" "Commandes utilisateur"
 .SH NOM
 psim \- table des processus lisible à partir de la sortie de ps
 .SH SYNOPSIS
@@ -79,6 +79,13 @@ Un processus dont le parent n'est pas dans la liste ouvre une nouvelle racine :
 on obtient une forêt, jamais une branche coupée.
 L'indentation ne s'applique qu'aux colonnes de commande et d'arguments ; les
 colonnes de PID ne bougent pas.
+.TP
+.B \-\-no\-tree
+Annuler
+.BR \-\-tree ,
+y compris un
+.B TREE=1
+hérité du fichier de configuration.
 .TP
 .B \-n, \-\-newbie
 Affichage simplifié : PID, USER, mémoire résidente en MiB, %CPU et commande.
