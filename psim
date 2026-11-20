@@ -84,7 +84,7 @@ declare -a ROWPIDS=()
 # Boîtes (détails, confirmation de kill) : lignes déjà rendues, leur largeur
 # visible, la géométrie, le décor et le titre courant
 declare -a DET_ROWS=() DET_W=()
-declare -i DET_INNER=0 DET_FREEZE_SAVE=0
+declare -i DET_INNER=0 DET_FREEZE_SAVE=0 DET_TOP=0 DET_VIEW=0
 declare SIZE_STR='' AGE_STR='' DET_NAME='?'
 declare DET_GRIS='' DET_RST='' DET_HZ='' DET_BV='' DET_TL='' DET_TR='' DET_BL='' DET_BR=''
 declare DET_BG='' DET_RS='' DET_HINT=''
@@ -309,6 +309,8 @@ ${Vert}RACCOURCIS (dynamique)${Reset}
          (Maj+clic : la sélection de texte du terminal reste possible)
    Entrée / d  détails du processus sélectionné (une touche ferme la boîte,
    x / X y terminent le processus, après la même confirmation que dans la liste)
+   ↑/↓  PgUp/PgDn  Home/End  défilent la fiche : une ligne de commande très
+   longue est découpée sur plusieurs lignes, elle est montrée en entier.
    PgUp/PgDn  défiler d'une page   Home/End  début / fin de liste
    x  TERM  et  X  KILL  sur le processus sélectionné, après confirmation (y).
    PID 1, psim et ses propres parents sont refusés.
@@ -1579,7 +1581,7 @@ HELP_OVERLAY() {
            'augmenter / diminuer le taux de rafraîchissement'
            'gel / dégel' 'sélectionner (tenir = accélère)'
            'sélectionner la ligne' 'détails du processus' "défiler d'une page" 
-           'premier / dernier' 'relâcher la sélection' 'détails du processus'
+           'premier / dernier' 'relâcher la sélection' 'détails du processus (défile)'
            'TERM / KILL (y, ou dans les détails)' 'simplifié / étendu'
            'arbre on / off' 'quitter' 'cette aide' )
     n=${#ktxt[@]}
@@ -1692,9 +1694,11 @@ HELP_OVERLAY() {
 # Boîtes : détails d'un processus et confirmation de kill
 ##############################################################################
 # Les deux boîtes partagent le même collecteur de /proc (aucun fork) et le même
-# dessin : DET_INIT prépare la géométrie, PROC_INFO remplit les lignes,
-# DET_DRAW dessine (et allume le drapeau GEL, la liste étant figée), DET_CLOSE
-# restaure l'état et efface. Une touche ferme, la boucle redessine.
+# dessin : DET_INIT prépare la géométrie, PROC_INFO remplit toutes les lignes,
+# DET_DRAW dessine une fenêtre de DET_VIEW lignes à partir de DET_TOP (et allume
+# le drapeau GEL, la liste étant figée), DET_CLOSE restaure l'état. Les détails
+# défilent (une commande très longue y est entière) ; la confirmation, elle, ne
+# défile pas et se contente d'un DET_TRIM. Une touche ferme, la boucle redessine.
 
 # Taille en Kio -> SIZE_STR (printf -v : pas de $( ), donc pas de fork)
 FMT_SIZE() {
@@ -1773,6 +1777,21 @@ DET_SEP() {
     return 0
 }
 
+# Ramène DET_ROWS à $1 lignes, la dernière portant un « … » (boîtes non
+# défilantes : la confirmation, où la question occupe les dernières lignes)
+DET_TRIM() {
+    local -i keep="${1:-20}" i
+    if (( ${#DET_ROWS[@]} > keep )); then
+        for (( i = ${#DET_ROWS[@]} - 1; i >= keep - 1; i-- )); do
+            unset 'DET_ROWS[i]' 'DET_W[i]'
+        done
+        DET_ROWS=("${DET_ROWS[@]}")
+        DET_W=("${DET_W[@]}")
+        DET_RAW "  …" 3
+    fi
+    return 0
+}
+
 # Décor et géométrie : largeur de la boîte selon le terminal
 DET_INIT() {
     local -i inner
@@ -1790,12 +1809,18 @@ DET_INIT() {
     DET_INNER="${inner}"
     DET_NAME='?'
     DET_HINT=''
+    # fenêtre : DET_VIEW lignes à partir de DET_TOP (0 = tout afficher) ;
+    # l'état du gel est relevé ici, une seule fois par boîte
+    DET_TOP=0
+    DET_VIEW=0
+    DET_FREEZE_SAVE=${FREEZE}
     return 0
 }
 
-# Remplit DET_ROWS pour un PID, sans dépasser $2 lignes. -> DET_NAME
+# Remplit DET_ROWS pour un PID (toutes les lignes, la boîte en affiche une
+# fenêtre). -> DET_NAME
 PROC_INFO() {
-    local -i pid="${1:-0}" budget="${2:-40}" i=0 vw=0 present=1 pushed=0
+    local -i pid="${1:-0}" vw=0 present=1
     local pdir="/proc/${pid}"
     local -a av=() sf=()
     local key val statline rest name='?' state='?' ppid='-' threads='-' nice='-'
@@ -1967,44 +1992,55 @@ PROC_INFO() {
             arg="${arg//$'\r'/ }"
             arg="${arg//$'\t'/ }"
             while [[ "${arg}" == *'  '* ]]; do arg="${arg//'  '/' '}"; done
-            if (( ${#joined} + ${#arg} + 1 > vw )); then
-                if (( pushed >= 3 )); then
-                    DET_CMD "${joined} …"
+            # un argument plus long que la boîte est découpé, pas tronqué : la
+            # commande entière reste lisible en défilant
+            if (( ${#arg} > vw )); then
+                if [[ -n "${joined}" ]]; then
+                    DET_CMD "${joined}"
                     joined=''
-                    break
                 fi
-                DET_CMD "${joined}"
-                pushed=$(( pushed + 1 ))
+                while (( ${#arg} > vw )); do
+                    DET_CMD "${arg:0:vw}"
+                    arg="${arg:vw}"
+                done
+            fi
+            if (( ${#joined} + ${#arg} + 1 > vw )); then
+                [[ -n "${joined}" ]] && DET_CMD "${joined}"
                 joined="${arg}"
             else
                 joined="${joined:+${joined} }${arg}"
             fi
+            # garde-fou : une cmdline pathologique ne doit pas remplir la
+            # mémoire (le repli par tranches est linéaire, pas infini)
+            (( ${#DET_ROWS[@]} > 1200 )) && break
         done
         if [[ -n "${joined}" ]]; then
             DET_CMD "${joined}"
         fi
     fi
-
-    # budget de hauteur : on coupe la queue (continuations de commande, cgroup)
-    # plutôt que de laisser la boîte déborder
-    if (( ${#DET_ROWS[@]} > budget )); then
-        for (( i = ${#DET_ROWS[@]} - 1; i >= budget - 1; i-- )); do
-            unset 'DET_ROWS[i]' 'DET_W[i]'
-        done
-        DET_ROWS=("${DET_ROWS[@]}")
-        DET_W=("${DET_W[@]}")
-        DET_RAW "  …" 3
-    fi
     return 0
 }
 
 # Dessine la boîte (titre en $1) sans lire de touche ; allume le drapeau GEL.
+# DET_VIEW = hauteur de la fenêtre en lignes (0 = tout afficher), DET_TOP = la
+# première ligne montrée. DET_TOP est ramené dans les bornes ici, ce qui
+# dispense les appelants de les recalculer ; DET_VIEW n'est jamais écrasé.
 DET_DRAW() {
     local title="$1" line spaces
-    local -i i pad rows bh bw x0 y0 inner sx hintrows
+    local -i i pad rows view bh bw x0 y0 inner sx hintrows total
     inner="${DET_INNER}"
-    rows=${#DET_ROWS[@]}
-    (( rows < 1 )) && rows=1
+    (( ${#DET_ROWS[@]} < 1 )) && DET_RAW '' 0
+    total=${#DET_ROWS[@]}
+    if (( DET_VIEW < 1 )); then
+        view=${total}
+        DET_TOP=0
+    else
+        view=${DET_VIEW}
+        (( view > total )) && view=${total}
+    fi
+    (( DET_TOP > total - view )) && DET_TOP=$(( total - view ))
+    (( DET_TOP < 0 )) && DET_TOP=0
+    rows=${view}
     hintrows=0
     [[ -n "${DET_HINT}" ]] && hintrows=1
     bh=$(( rows + 2 + hintrows ))
@@ -2016,13 +2052,16 @@ DET_DRAW() {
     (( y0 < 1 )) && y0=1
 
     # la boîte bloque la boucle : la liste est figée, on allume le drapeau GEL
-    # du statut (restauré par DET_CLOSE) ; si la boîte occupe la première ligne,
-    # le drapeau va dans le titre
-    DET_FREEZE_SAVE=${FREEZE}
+    # du statut (état relevé par DET_INIT, restauré par DET_CLOSE) ; si la boîte
+    # occupe la première ligne, le drapeau va dans le titre
     FREEZE=1
     STATUS_BUILD
     if (( y0 == 1 )); then
         title+='· GEL '
+    fi
+    # fenêtre partielle : où l'on en est (le défilement se voit sans compter)
+    if (( view < total )); then
+        title+="· $(( DET_TOP + 1 ))-$(( DET_TOP + rows ))/${total} "
     fi
 
     (( ${#title} > inner )) && title=" ${DET_NAME} "
@@ -2033,11 +2072,11 @@ DET_DRAW() {
     printf '%s\033[%d;%dH%s%s%s\033[K' "${DET_BG}" "${y0}" "${x0}" "${Blanc}" "${line}" "${DET_RS}"
 
     for (( i = 0; i < rows; i++ )); do
-        pad=$(( inner - DET_W[i] ))
+        pad=$(( inner - ${DET_W[DET_TOP + i]:-0} ))
         (( pad < 0 )) && pad=0
         printf -v spaces '%*s' "${pad}" ''
         printf '%s\033[%d;%dH%s%s%s' "${DET_BG}" "$(( y0 + 1 + i ))" "${x0}" \
-            "${Blanc}" "${DET_BV}${DET_ROWS[i]}${spaces}${DET_BV}" "${DET_RS}"
+            "${Blanc}" "${DET_BV}${DET_ROWS[DET_TOP + i]}${spaces}${DET_BV}" "${DET_RS}"
     done
 
     if (( hintrows == 1 )); then
@@ -2077,20 +2116,38 @@ DET_CLOSE() {
 # Détails d'un processus (Entrée, d ou double-clic) — lecture seule, sauf
 # x/X qui terminent le processus affiché (mêmes garde-fous que la liste : PID 1,
 # psim et ses parents). La boîte de confirmation remplace celle des détails.
+# La fenêtre défile (flèches, j/k, PgUp/PgDn, Home/End) : une commande très
+# longue reste entièrement lisible, elle n'est plus coupée à trois lignes.
 DETAILS_OVERLAY() {
-    local -i pid="${1:-0}"
-    local sig=''
+    local -i pid="${1:-0}" step
+    local sig='' k=''
     DET_INIT
-    PROC_INFO "${pid}" $(( HEIGHT - 3 ))
-    DET_HINT='x = TERM   ·   X = KILL   ·   une autre touche ferme'
-    DET_DRAW " DÉTAILS — ${pid} ${DET_NAME} "
-    MODAL_KEY
+    PROC_INFO "${pid}"
+    # toute la hauteur utile ; DET_DRAW borne DET_TOP et affiche « n-m/total »
+    DET_VIEW=$(( HEIGHT - 3 ))
+    (( DET_VIEW < 1 )) && DET_VIEW=1
+    step=$(( DET_VIEW - 1 ))
+    (( step < 1 )) && step=1
+    DET_HINT='↑ ↓ / PgUp PgDn défilent   ·   x = TERM   ·   X = KILL   ·   une autre touche ferme'
+    while :; do
+        DET_DRAW " DÉTAILS — ${pid} ${DET_NAME} "
+        MODAL_KEY
+        k="${MODAL_KEY}"
+        case "${k}" in
+            $'\e[A'|k) DET_TOP=$(( DET_TOP - 1 )) ;;
+            $'\e[B'|j) DET_TOP=$(( DET_TOP + 1 )) ;;
+            $'\e[5'|b) DET_TOP=$(( DET_TOP - step )) ;;
+            $'\e[6'|' ') DET_TOP=$(( DET_TOP + step )) ;;
+            $'\e[H'|g) DET_TOP=0 ;;
+            $'\e[F'|G) DET_TOP=999999 ;;
+            '~') : ;;                  # fin de la séquence PgUp/PgDn déjà lue
+            x) sig='TERM'; break ;;
+            X) sig='KILL'; break ;;
+            *) break ;;
+        esac
+    done
     DET_CLOSE
-    case "${MODAL_KEY}" in
-        x) sig='TERM' ;;
-        X) sig='KILL' ;;
-        *) return 0 ;;
-    esac
+    if [[ -z "${sig}" ]]; then return 0; fi
     # la confirmation doit s'ouvrir sur le tableau, pas sur un écran vide :
     # DET_CLOSE efface, DRAW_FRAME remet l'image, puis la boîte se dessine dessus
     DRAW_FRAME
@@ -2106,8 +2163,10 @@ CONFIRM_KILL() {
     local hk='' q=''
     ASKED=0
     DET_INIT
-    # deux lignes réservées : la question et la ligne d'aide
-    PROC_INFO "${pid}" $(( HEIGHT - 5 ))
+    # deux lignes réservées : la question et la ligne d'aide ; cette boîte ne
+    # défile pas, donc on coupe la queue comme avant
+    PROC_INFO "${pid}"
+    DET_TRIM $(( HEIGHT - 5 ))
     DET_SEP
     q=" envoyer ${sig} à ${pid} ?"
     DET_RAW "${RougeBold}${q}${DET_RST}" "${#q}"

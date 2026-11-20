@@ -135,7 +135,7 @@ psim -k | grep kworker      # dans un pipe
 | `←` `→` | affichage simplifié / étendu |
 | `↑` `↓` | sélectionner (maintenir accélère) ; Échap relâche |
 | `PgUp` `PgDn` `Home` `End` | défilement de la vue |
-| `Entrée` / `d` | détails du processus sélectionné |
+| `Entrée` / `d` | détails du processus sélectionné (la fiche défile : `↑` `↓` `PgUp` `PgDn` `Home` `End`) |
 | `x` / `X` | TERM / KILL, après confirmation |
 | `+` `-` | intervalle de rafraîchissement |
 | `F` | gel / reprise |
