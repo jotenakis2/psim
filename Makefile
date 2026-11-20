@@ -15,7 +15,7 @@ DESTDIR    ?=
 
 INSTALL    ?= install
 RM         ?= rm -f
-SHELLCHECK ?= $(shell command -v shellcheck-real 2>/dev/null || command -v shellcheck 2>/dev/null || echo shellcheck)
+SHELLCHECK ?= shellcheck
 
 .PHONY: all check install install-bin install-completion install-man uninstall help
 

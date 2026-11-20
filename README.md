@@ -184,7 +184,7 @@ Les options de la ligne de commande l'emportent sur la configuration.
 ## Développement
 
 ```bash
-make check        # shellcheck-real --enable=all si disponible
+make check        # shellcheck --enable=all (le vrai ShellCheck)
 ```
 
 Après tout ajout, retrait ou changement d'option, mettre à jour ensemble :
