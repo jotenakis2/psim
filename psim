@@ -125,12 +125,15 @@ QUIT() { exit "${1:-0}"; }
 DEFINE_COLORS() {
     if (( NO_COLOR == 1 )) || (( TTY == 0 )) || [[ "${TERM:-dumb}" == "dumb" ]]; then
         Rouge="" Vert="" Jaune="" Bleu="" BleuBold="" Magenta="" Cyan="" Blanc=""
-        RougeBold="" Gris="" BgGris="" Reset="" ResetFg="" Underline="" Gras=""
+        RougeBold="" Gris="" BgGris="" Reset="" ResetFg="" Underline="" Gras="" GrisOpt=""
     else
         Rouge=$'\033[31m' ; Vert=$'\033[32m' ; Jaune=$'\033[33m'
         Bleu=$'\033[34m'  ; BleuBold=$'\033[1;34m' ; Magenta=$'\033[35m'
         Cyan=$'\033[36m'  ; Blanc=$'\033[37m' ; RougeBold=$'\033[1;31m'
         Gris=$'\033[37m'  ; BgGris=$'\033[100m'
+        # GrisOpt : gris sombre (bright black) pour la colonne des options ;
+        # 37 (blanc) se confond avec le texte courant dans la plupart des thèmes
+        GrisOpt=$'\033[90m'
         Reset=$'\033[0m'  ; ResetFg=$'\033[39m' ; Underline=$'\033[4m'
         Gras=$'\033[1m'
     fi
@@ -683,11 +686,12 @@ BEGIN {
     if (color) {
         RED = red; GREEN = green; YELLOW = yellow; BLUE = blue
         MAGENTA = magenta; CYAN = cyan; WHITE = white; GREY = grey
+        OPTGREY = greyopt
         BG = bg; RESET = reset; RFG = resetfg; UL = underline; BOLD = bold
         EL = "\033[0K"
     } else {
         RED = ""; GREEN = ""; YELLOW = ""; BLUE = ""
-        MAGENTA = ""; CYAN = ""; WHITE = ""; GREY = ""
+        MAGENTA = ""; CYAN = ""; WHITE = ""; GREY = ""; OPTGREY = ""
         BG = ""; RESET = ""; RFG = ""; UL = ""; BOLD = ""
         EL = ""
     }
@@ -879,7 +883,7 @@ function draw_row(ind, indw,   line, cw, ow, cmd_d, pad_n, user_c, nice_c, cmd_c
     }
 
     if (ow > 0 && C_args != "")
-        line = line SEPS GREY cut(C_args, ow) RESET
+        line = line SEPS OPTGREY cut(C_args, ow) RESET
 
     # ligne sélectionnée : bande pleine largeur. L'effacement de fin de ligne doit
     # être émis AVANT le reset final : un EL après le reset repeint la zone avec
@@ -1063,6 +1067,7 @@ RENDER() {
         -v red="${Rouge}"      -v green="${Vert}"     -v yellow="${Jaune}"
         -v blue="${Bleu}"      -v magenta="${Magenta}" -v cyan="${Cyan}"
         -v white="${Blanc}"    -v grey="${Gris}"      -v bg="${BgGris}"
+        -v greyopt="${GrisOpt}"
         -v reset="${Reset}"    -v resetfg="${ResetFg}" -v underline="${Underline}"
         -v bold="${Gras}"
     )
