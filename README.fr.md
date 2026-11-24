@@ -108,6 +108,7 @@ psim [OPTIONS] [--N]
 | `-M`, `--machine-cpu` | %CPU en pourcentage de la machine |
 | `--per-core` | %CPU par cœur (défaut) |
 | `--no-config` | ignorer le fichier de configuration |
+| `--lang fr\|en` | imposer la langue de l'interface |
 | `--debug` | ne pas masquer les erreurs `ps`/`awk` |
 | `--N` | N premiers processus, une seule fois (`0` : tout) |
 | `-v`, `--version` | version |
@@ -190,7 +191,8 @@ Les options de la ligne de commande l'emportent sur la configuration.
 L'interface suit la locale : la première des variables `LC_ALL`, `LC_MESSAGES`,
 `LANGUAGE`, `LANG` qui est définie décide. Une valeur commençant par `fr` donne
 le français, toute autre l'anglais — ainsi `LC_ALL=fr_FR.UTF-8 psim` force le
-français et `LC_ALL=C psim` donne l'anglais.
+français et `LC_ALL=C psim` donne l'anglais. `--lang fr` ou `--lang en` l'emporte
+sur la locale.
 
 Cela couvre l'aide, les messages d'erreur et d'avertissement, la ligne de
 statut, l'aide en surimpression, la fiche du processus, la confirmation de

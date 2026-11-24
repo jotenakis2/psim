@@ -106,21 +106,22 @@ RougeBold="" Gris="" BgGris="" Reset="" ResetFg="" Underline="" Gras=""
 ##############################################################################
 # Langue de l'interface
 #
-# LANG_CODE vaut « fr » ou « en » : la locale décide (LC_ALL, sinon LC_MESSAGES,
-# sinon LANGUAGE, sinon LANG), tout ce qui commence par « fr » donnant le
-# français et le reste l'anglais. C'est une comparaison de chaînes bash : aucun
-# fork au démarrage. Les textes d'interface vivent dans TR, dans les deux pages
-# d'aide et dans HK/HD (aide en surimpression) ; les commentaires du code, eux,
-# restent en français, ainsi que les étiquettes techniques (PID, USER, MiB,
-# %CPU, TOTAL (displayed), proc).
+# LANG_CODE vaut « fr » ou « en » : --lang le fixe, sinon la locale décide
+# (LC_ALL, sinon LC_MESSAGES, sinon LANGUAGE, sinon LANG), tout ce qui commence
+# par « fr » donnant le français et le reste l'anglais. C'est une comparaison de
+# chaînes bash : aucun fork au démarrage. Les textes d'interface vivent dans TR,
+# dans les deux pages d'aide et dans HK/HD (aide en surimpression) ; les
+# commentaires du code, eux, restent en français, ainsi que les étiquettes
+# techniques (PID, USER, MiB, %CPU, TOTAL (displayed), proc).
 ##############################################################################
 declare -A TR=()
 declare -a HK=() HD=()
 declare LANG_CODE='en'
+declare LANG_ARG=''               # --lang, relevé avant SET_LANG (voir SCAN_LANG)
 declare TXT=''                    # dernier message produit par t()
 
 SET_LANG() {
-    local loc="${LC_ALL:-${LC_MESSAGES:-${LANGUAGE:-${LANG:-}}}}"
+    local loc="${LANG_ARG:-${LC_ALL:-${LC_MESSAGES:-${LANGUAGE:-${LANG:-}}}}}"
     loc="${loc%%:*}"              # LANGUAGE peut lister plusieurs langues
     if [[ "${loc,,}" == fr* ]]; then
         LANG_CODE='fr'
@@ -129,6 +130,20 @@ SET_LANG() {
         LANG_CODE='en'
         CATALOG_EN
     fi
+    return 0
+}
+
+# --lang : le catalogue est rechargé pour que les messages suivants suivent, et
+# une valeur hors fr/en est refusée (la locale, elle, peut être n'importe quoi :
+# seule compte sa première lettre).
+SET_LANG_ARG() {
+    LANG_ARG="${1,,}"
+    case "${LANG_ARG}" in
+        fr|en) SET_LANG ;;
+        *)     t arg_lang "${1}"
+               ERR "${TXT}"
+               QUIT 2 ;;
+    esac
     return 0
 }
 
@@ -205,6 +220,7 @@ CATALOG_FR() {
         [arg_unknown]='option inconnue : {1}'
         [arg_unexpected]='argument inattendu : {1}'
         [arg_kernel]='--kernel et --kernel-only sont incompatibles.'
+        [arg_lang]='langue inconnue : {1} (fr ou en)'
 
         [env_home]='ni HOME ni XDG_CONFIG_HOME/XDG_CACHE_HOME : impossible de situer la configuration.'
         [dep_ps]='commande ps introuvable.'
@@ -300,6 +316,7 @@ CATALOG_EN() {
         [arg_unknown]='unknown option: {1}'
         [arg_unexpected]='unexpected argument: {1}'
         [arg_kernel]='--kernel and --kernel-only are mutually exclusive.'
+        [arg_lang]='unknown language: {1} (fr or en)'
 
         [env_home]='neither HOME nor XDG_CONFIG_HOME/XDG_CACHE_HOME: cannot locate the configuration.'
         [dep_ps]='ps command not found.'
@@ -568,6 +585,7 @@ ${Vert}OPTIONS${Reset}
    ${Bleu}-M, --machine-cpu${Reset}      %CPU des lignes en % de la machine (défaut : par cœur)
    ${Bleu}    --per-core${Reset}         %CPU des lignes par cœur (défaut)
    ${Bleu}    --no-config${Reset}        ignorer le fichier de configuration
+   ${Bleu}    --lang LANG${Reset}        langue de l'interface : fr ou en (défaut : locale)
    ${Bleu}    --debug${Reset}            ne pas masquer les erreurs ps/awk
    ${Bleu}    --N${Reset}                N premiers processus, une seule fois (N=0 : tout)
    ${Bleu}-v, --version${Reset}          version
@@ -604,6 +622,7 @@ ${Vert}OPTIONS${Reset}
    ${Bleu}-M, --machine-cpu${Reset}      %CPU of rows as a share of the machine (default: per core)
    ${Bleu}    --per-core${Reset}         %CPU of rows per core (default)
    ${Bleu}    --no-config${Reset}        ignore the configuration file
+   ${Bleu}    --lang LANG${Reset}        interface language: fr or en (default: locale)
    ${Bleu}    --debug${Reset}            do not hide ps/awk errors
    ${Bleu}    --N${Reset}                first N processes, once (N=0: all)
    ${Bleu}-v, --version${Reset}          version
@@ -829,6 +848,32 @@ SCAN_NO_CONFIG() {
     return 0
 }
 
+# --lang doit être connu AVANT SET_LANG : la langue de l'aide et des messages
+# dépend de lui, et les premières erreurs (dépendances, configuration) tombent
+# avant PARSE_ARGS. Seules les valeurs connues sont retenues ici : une langue
+# invalide laisse la locale décider, pour que l'erreur « langue inconnue » soit
+# écrite dans la langue que l'utilisateur avait déjà. Ce balayage s'arrête sur
+# --, qui termine les options, comme PARSE_ARGS.
+SCAN_LANG() {
+    local arg val
+    while (( $# > 0 )); do
+        arg="$1"
+        case "${arg}" in
+            --) return 0 ;;
+            --lang) val="${2:-}" ;;
+            --lang=*) val="${arg#*=}" ;;
+            *) shift; continue ;;
+        esac
+        val="${val,,}"
+        case "${val}" in
+            fr|en) LANG_ARG="${val}" ;;
+            *) : ;;
+        esac
+        return 0
+    done
+    return 0
+}
+
 PARSE_ARGS() {
     local arg
     local -i k=0 konly=0
@@ -857,6 +902,11 @@ PARSE_ARGS() {
             -M|--machine-cpu) CPU_MODE=1; shift ;;
             --per-core) CPU_MODE=0; shift ;;
             --no-config) NO_CONFIG=1; shift ;;
+            --lang)
+                NEED_ARG "${arg}" "${2:-}"
+                SET_LANG_ARG "${2}"
+                shift 2
+                ;;
             --debug) DEBUG=1; shift ;;
             -h|--help) HELP; QUIT 0 ;;
             -v|--version) VERSION; QUIT 0 ;;
@@ -881,7 +931,7 @@ PARSE_ARGS() {
                 shift 2
                 ;;
             --*)
-                if [[ "${arg}" == --filter=* || "${arg}" == --watch=* ]]; then
+                if [[ "${arg}" == --filter=* || "${arg}" == --watch=* || "${arg}" == --lang=* ]]; then
                     shift
                     set -- "${arg%%=*}" "${arg#*=}" "$@"
                     continue
@@ -2883,6 +2933,7 @@ VALIDATE_FILTER() {
 # Main
 ##############################################################################
 MAIN() {
+    SCAN_LANG "$@"
     SET_LANG
     TTY=0
     [[ -t 1 ]] && TTY=1

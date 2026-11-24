@@ -106,6 +106,7 @@ psim [OPTIONS] [--N]
 | `-M`, `--machine-cpu` | %CPU as a share of the machine |
 | `--per-core` | %CPU per core (default) |
 | `--no-config` | ignore the configuration file |
+| `--lang fr\|en` | force the interface language |
 | `--debug` | do not hide `ps`/`awk` errors |
 | `--N` | first N processes, once (`0`: all) |
 | `-v`, `--version` | version |
@@ -187,7 +188,7 @@ Command-line options win over the configuration.
 The interface follows the locale: the first of `LC_ALL`, `LC_MESSAGES`,
 `LANGUAGE`, `LANG` that is set decides. A value starting with `fr` gives
 French, anything else English — so `LC_ALL=fr_FR.UTF-8 psim` forces French and
-`LC_ALL=C psim` gives English.
+`LC_ALL=C psim` gives English. `--lang fr` or `--lang en` wins over the locale.
 
 This covers the help, the error and warning messages, the status line, the
 shortcut overlay, the process box, the kill confirmation, the zsh completion

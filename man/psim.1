@@ -152,6 +152,12 @@ This is the default and cancels
 Do not read the configuration file at all.
 The session starts from the built\-in defaults.
 .TP
+.BI \-\-lang " fr"|en
+Force the interface language, whatever the locale says.
+Without it the locale decides, as described under
+.B ENVIRONMENT
+below.
+.TP
 .B \-\-debug
 Do not hide errors from
 .B ps
@@ -418,8 +424,9 @@ Defaults to 120x40.
 Relocate the configuration and cache directories.
 .TP
 .B LC_ALL, LC_MESSAGES, LANGUAGE, LANG
-Choose the interface language: the first one set decides, a value starting
-with
+Choose the interface language, unless
+.B \-\-lang
+was given: the first one set decides, a value starting with
 .B fr
 gives French, anything else English.
 This covers the help, the error and warning messages, the status line, the

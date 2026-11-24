@@ -158,6 +158,12 @@ C'est le défaut ; annule
 Ne pas lire du tout le fichier de configuration.
 La session repart des valeurs par défaut.
 .TP
+.BI \-\-lang " fr"|en
+Imposer la langue de l'interface, quelle que soit la locale.
+Sans elle, c'est la locale qui décide, comme expliqué à la rubrique
+.B "VARIABLES D'ENVIRONNEMENT"
+ci-dessous.
+.TP
 .B \-\-debug
 Ne pas masquer les erreurs de
 .B ps
@@ -428,8 +434,9 @@ Valeurs par défaut : 120x40.
 Déplacent les répertoires de configuration et de cache.
 .TP
 .B LC_ALL, LC_MESSAGES, LANGUAGE, LANG
-Choisissent la langue de l'interface : la première définie décide, une valeur
-commençant par
+Choisissent la langue de l'interface, sauf si
+.B \-\-lang
+est donnée : la première définie décide, une valeur commençant par
 .B fr
 donne le français, toute autre l'anglais.
 Cela couvre l'aide, les messages d'erreur et d'avertissement, la ligne de
