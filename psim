@@ -112,7 +112,7 @@ RougeBold="" Gris="" BgGris="" Reset="" ResetFg="" Underline="" Gras=""
 # chaînes bash : aucun fork au démarrage. Les textes d'interface vivent dans TR,
 # dans les deux pages d'aide et dans HK/HD (aide en surimpression) ; les
 # commentaires du code, eux, restent en français, ainsi que les étiquettes
-# techniques (PID, USER, MiB, %CPU, TOTAL (displayed), proc).
+# techniques (PID, USER, MiB, %CPU, proc).
 ##############################################################################
 declare -A TR=()
 declare -a HK=() HD=()
@@ -230,6 +230,7 @@ CATALOG_FR() {
         [filter_invalid]='filtre invalide (expression régulière) : {1}'
         [gawk_bs]='dans gawk, « \b » est un backspace : utilisez « \y » pour une limite de mot'
 
+        [total]='TOTAL (affiché)'
         [st_invalid]='invalide'
         [st_frozen]='GEL'
         [st_tree]='arbre'
@@ -326,6 +327,7 @@ CATALOG_EN() {
         [filter_invalid]='invalid filter (regular expression): {1}'
         [gawk_bs]='in gawk, « \b » is a backspace: use « \y » for a word boundary'
 
+        [total]='TOTAL (displayed)'
         [st_invalid]='invalid'
         [st_frozen]='FROZEN'
         [st_tree]='tree'
@@ -652,7 +654,7 @@ ${Vert}DESCRIPTION${Reset}
      • ${Bleu}statique${Reset}  : un seul affichage (--N, --watch 0, ou sortie redirigée).
 
 ${Vert}PIED DE PAGE${Reset}
-   ${Jaune}TOTAL (displayed)${Reset} cumule les lignes affichées : RSS sous ${Jaune}MiB${Reset}, %MEM sous ${Jaune}%MEM${Reset},
+   ${Jaune}TOTAL (affiché)${Reset} cumule les lignes affichées : RSS sous ${Jaune}MiB${Reset}, %MEM sous ${Jaune}%MEM${Reset},
    et ${Jaune}%CPU${Reset} dans la ${Jaune}même unité que les lignes${Reset} : par défaut 100 % = 1 cœur,
    ou en % de la machine après la touche ${Jaune}M${Reset} / ${Jaune}--machine-cpu${Reset}
    (colonne alors intitulée ${Jaune}%CPU/m${Reset}, comportement de ${Jaune}psim${Reset}).
@@ -1498,9 +1500,9 @@ END {
         norm = cpu_mode ? ((ncpu > 0) ? sum_cpu / ncpu : sum_cpu) : sum_cpu
         tail = sprintf("%d/%d proc", shown, total)
         if (newbie)
-            head = sprintf("%-18s %6.0f %6.1f   ", "TOTAL (displayed)", sum_rss, norm)
+            head = sprintf("%-18s %6.0f %6.1f   ", total_lbl, sum_rss, norm)
         else
-            head = sprintf("%-30s %6.0f %6.1f %6.1f   ", "TOTAL (displayed)", sum_rss, sum_mem, norm)
+            head = sprintf("%-30s %6.0f %6.1f %6.1f   ", total_lbl, sum_rss, sum_mem, norm)
         room = width - length(head)
         if (room < 0) room = 0
         emit(RED head substr(tail, 1, room) RESET EL)
@@ -1541,7 +1543,7 @@ RENDER() {
         -v selpid="${SEL_PID}" -v tree="${TREE}" \
         -v treep="$(( NEWBIE == 1 && TREE == 1 ? 1 : 0 ))"
         -v me="${ME}"          -v ncpu="${NCPU}"     -v drawfile="${DRAW_FILE}"
-        -v status="${status_c}" -v statusw="${STATUSW}"
+        -v status="${status_c}" -v statusw="${STATUSW}" -v total_lbl="${TR[total]}"
         -v red="${Rouge}"      -v green="${Vert}"     -v yellow="${Jaune}"
         -v blue="${Bleu}"      -v magenta="${Magenta}" -v cyan="${Cyan}"
         -v white="${Blanc}"    -v grey="${Gris}"      -v bg="${BgGris}"

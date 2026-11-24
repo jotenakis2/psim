@@ -198,8 +198,7 @@ Cela couvre l'aide, les messages d'erreur et d'avertissement, la ligne de
 statut, l'aide en surimpression, la fiche du processus, la confirmation de
 terminaison, les descriptions de la complétion zsh et le journal. Les
 commentaires du code restent en français, et les étiquettes techniques (`PID`,
-`USER`, `MiB`, `%CPU`, `TOTAL (displayed)`, `proc`) sont identiques dans les
-deux langues.
+`USER`, `MiB`, `%CPU`, `proc`) sont identiques dans les deux langues.
 
 L'interface plein écran compte le texte en caractères : il lui faut une locale
 multibyte. Quand la locale n'est pas UTF-8 (par exemple `LC_ALL=C psim`, le

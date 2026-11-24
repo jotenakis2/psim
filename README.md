@@ -193,8 +193,7 @@ French, anything else English — so `LC_ALL=fr_FR.UTF-8 psim` forces French and
 This covers the help, the error and warning messages, the status line, the
 shortcut overlay, the process box, the kill confirmation, the zsh completion
 descriptions and the log file. Code comments stay in French, and the technical
-labels (`PID`, `USER`, `MiB`, `%CPU`, `TOTAL (displayed)`, `proc`) are the same
-in both languages.
+labels (`PID`, `USER`, `MiB`, `%CPU`, `proc`) are the same in both languages.
 
 The full-screen interface counts text in characters, so it needs a multibyte
 locale. When the locale is not UTF-8 (for example `LC_ALL=C psim`, the easiest
