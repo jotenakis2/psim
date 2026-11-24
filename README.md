@@ -19,7 +19,8 @@ Version 1.9.2 — GPLv3. Original author: jotenakis.
   `/`.
 - **Process tree** (`-t`, `t` key): the `ppid` hierarchy, siblings following the
   active sort. A parent missing from the view yields a forest, not a cut branch.
-- **Real %CPU**, per core (default) or as a share of the machine (`-M`).
+- **Real %CPU**, per core (default) or as a share of the machine (`-M`); the
+  footer, `TOTAL (displayed)`, is always machine-wide.
 - **Clean output** in a pipe: `psim > list.txt`, `psim -k | grep ssh`.
 - **Configuration** validated key by key (`~/.config/psim/default.conf`), never
   evaluated as shell.
@@ -103,7 +104,7 @@ psim [OPTIONS] [--N]
 | `-F`, `--no-footer` | hide the footer |
 | `-O`, `--fullcmd` | full path and arguments |
 | `-0`, `--no-color` | no colours |
-| `-M`, `--machine-cpu` | %CPU as a share of the machine |
+| `-M`, `--machine-cpu` | %CPU of rows as a share of the machine (the footer stays machine-wide) |
 | `--per-core` | %CPU per core (default) |
 | `--no-config` | ignore the configuration file |
 | `--lang fr\|en` | force the interface language |
@@ -166,7 +167,7 @@ TREE=0
 # behaviour
 INTERVAL=1        # seconds; 0 = static
 KERNEL=0          # 0, 1 (include) or 2 (only)
-CPU_MODE=0        # 1 = machine-wide %CPU
+CPU_MODE=0        # 1 = machine-wide %CPU for the rows
 SORT=-%cpu        # pid, -pid, ppid, user, cmd, rss, %cpu, %mem, nice…
 FILTER=
 LOG=1

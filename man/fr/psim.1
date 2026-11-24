@@ -204,8 +204,11 @@ est actif.
 Le pied de page,
 .BR "TOTAL (affiché)" ,
 additionne la mémoire résidente des lignes affichées, leur %MEM (tableau
-complet seulement) et leur %CPU dans la même unité que les lignes, puis indique
-le nombre de processus affichés et le total.
+complet seulement) et leur %CPU en pourcentage de la machine — toujours, quelle
+que soit l'option
+.B \-\-machine\-cpu
+qui, elle, ne change que la colonne par processus ; le pied plafonne donc à
+100 %. Puis viennent le nombre de processus affichés et le total.
 .PP
 En mode interactif, une ligne d'état à droite de l'entête signale le filtre
 actif, l'état de gel et la position de défilement.

@@ -655,9 +655,10 @@ ${Vert}DESCRIPTION${Reset}
 
 ${Vert}PIED DE PAGE${Reset}
    ${Jaune}TOTAL (affiché)${Reset} cumule les lignes affichées : RSS sous ${Jaune}MiB${Reset}, %MEM sous ${Jaune}%MEM${Reset},
-   et ${Jaune}%CPU${Reset} dans la ${Jaune}même unité que les lignes${Reset} : par défaut 100 % = 1 cœur,
-   ou en % de la machine après la touche ${Jaune}M${Reset} / ${Jaune}--machine-cpu${Reset}
-   (colonne alors intitulée ${Jaune}%CPU/m${Reset}, comportement de ${Jaune}psim${Reset}).
+   et ${Jaune}%CPU toujours en % de la machine${Reset} — 100 % = la machine entière, plafond du
+   pied — quel que soit le réglage ${Jaune}M${Reset} / ${Jaune}--machine-cpu${Reset}. Ce réglage ne touche
+   que la colonne par processus (chaque ligne peut alors dépasser 100 %) ; en
+   % machine elle s'intitule ${Jaune}%CPU/m${Reset}.
 
 ${Vert}RACCOURCIS (dynamique)${Reset}
    /  filtre     Enter valider  Échap annuler     Ctrl-U effacer
@@ -734,9 +735,10 @@ ${Vert}DESCRIPTION${Reset}
 
 ${Vert}FOOTER${Reset}
    ${Jaune}TOTAL (displayed)${Reset} sums the displayed rows: RSS under ${Jaune}MiB${Reset}, %MEM under ${Jaune}%MEM${Reset},
-   and ${Jaune}%CPU${Reset} in the ${Jaune}same unit as the rows${Reset}: 100 % = 1 core by default,
-   or a share of the machine after the ${Jaune}M${Reset} key / ${Jaune}--machine-cpu${Reset}
-   (the column is then titled ${Jaune}%CPU/m${Reset}, psim's own behaviour).
+   and ${Jaune}%CPU always as a share of the machine${Reset} — 100 % = the whole machine, the
+   footer's maximum — whatever the ${Jaune}M${Reset} / ${Jaune}--machine-cpu${Reset} setting. That setting only
+   changes the per-process column (each row may then exceed 100 %); as a share
+   of the machine it is titled ${Jaune}%CPU/m${Reset}.
 
 ${Vert}SHORTCUTS (dynamic)${Reset}
    /  filter     Enter apply  Esc cancel       Ctrl-U clear
@@ -1496,8 +1498,11 @@ END {
         for (i = shown; i < limit; i++) emit(EL)
     }
     if (footer && pad) {
-        # le pied de page suit le mode d'affichage des lignes
-        norm = cpu_mode ? ((ncpu > 0) ? sum_cpu / ncpu : sum_cpu) : sum_cpu
+        # Le pied est TOUJOURS en % de la machine (100 % = machine entière) :
+        # cpu_mode / la touche M ne changent que la colonne par processus, dont
+        # les valeurs peuvent dépasser 100 % chacune. Additionner les lignes
+        # telles quelles donnerait un total qui change d'unité avec M.
+        norm = (ncpu > 0) ? sum_cpu / ncpu : sum_cpu
         tail = sprintf("%d/%d proc", shown, total)
         if (newbie)
             head = sprintf("%-18s %6.0f %6.1f   ", total_lbl, sum_rss, norm)

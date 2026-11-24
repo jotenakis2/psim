@@ -198,8 +198,10 @@ is active.
 The footer,
 .BR "TOTAL (displayed)" ,
 sums the resident memory of the displayed rows, their %MEM (full table only)
-and their %CPU in the same unit as the rows, followed by the displayed and total
-process counts.
+and their %CPU as a share of the machine — always, whatever
+.B \-\-machine\-cpu
+says, since that option only changes the per-process column; the footer is
+therefore capped at 100 %. The displayed and total process counts follow.
 .PP
 In interactive mode, a status line to the right of the header reports the
 active filter, freeze state and scroll position.

@@ -20,7 +20,8 @@ Version 1.9.2 — GPLv3. Auteur original : jotenakis.
 - **Arbre des processus** (`-t`, touche `t`) : hiérarchie des `ppid`, les frères
   suivent le tri actif. Un parent absent de la vue donne une forêt, pas une
   branche coupée.
-- **%CPU** réel, par cœur (défaut) ou en pourcentage de la machine (`-M`).
+- **%CPU** réel, par cœur (défaut) ou en pourcentage de la machine (`-M`) ; le
+  pied de page, `TOTAL (affiché)`, reste toujours en % de la machine.
 - **Sortie propre** dans un pipe : `psim > liste.txt`, `psim -k | grep ssh`.
 - **Configuration** validée clé par clé (`~/.config/psim/default.conf`), jamais
   évaluée comme du shell.
@@ -105,7 +106,7 @@ psim [OPTIONS] [--N]
 | `-F`, `--no-footer` | masquer le pied de page |
 | `-O`, `--fullcmd` | chemin complet et arguments |
 | `-0`, `--no-color` | sans couleurs |
-| `-M`, `--machine-cpu` | %CPU en pourcentage de la machine |
+| `-M`, `--machine-cpu` | %CPU des lignes en pourcentage de la machine (le pied reste en % machine) |
 | `--per-core` | %CPU par cœur (défaut) |
 | `--no-config` | ignorer le fichier de configuration |
 | `--lang fr\|en` | imposer la langue de l'interface |
@@ -169,7 +170,7 @@ TREE=0
 # comportement
 INTERVAL=1        # secondes ; 0 = statique
 KERNEL=0          # 0, 1 (inclure) ou 2 (seulement)
-CPU_MODE=0        # 1 = %CPU de la machine
+CPU_MODE=0        # 1 = %CPU des lignes en % machine
 SORT=-%cpu        # pid, -pid, ppid, user, cmd, rss, %cpu, %mem, nice…
 FILTER=
 LOG=1
