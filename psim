@@ -28,7 +28,7 @@
 ##############################################################################
 set -euo pipefail
 
-readonly VER="1.8.1"
+readonly VER="1.9.0"
 readonly NAME="${0##*/}"
 readonly CONF_NAME="psim"       # config et cache : ~/.config/psim et ~/.cache/psim
 readonly SELF_PID="${BASHPID:-$$}"
@@ -104,10 +104,261 @@ Rouge="" Vert="" Jaune="" Bleu="" BleuBold="" Magenta="" Cyan="" Blanc=""
 RougeBold="" Gris="" BgGris="" Reset="" ResetFg="" Underline="" Gras=""
 
 ##############################################################################
+# Langue de l'interface
+#
+# LANG_CODE vaut « fr » ou « en » : la locale décide (LC_ALL, sinon LC_MESSAGES,
+# sinon LANGUAGE, sinon LANG), tout ce qui commence par « fr » donnant le
+# français et le reste l'anglais. C'est une comparaison de chaînes bash : aucun
+# fork au démarrage. Les textes d'interface vivent dans TR, dans les deux pages
+# d'aide et dans HK/HD (aide en surimpression) ; les commentaires du code, eux,
+# restent en français, ainsi que les étiquettes techniques (PID, USER, MiB,
+# %CPU, TOTAL (displayed), proc).
+##############################################################################
+declare -A TR=()
+declare -a HK=() HD=()
+declare LANG_CODE='en'
+declare TXT=''                    # dernier message produit par t()
+
+SET_LANG() {
+    local loc="${LC_ALL:-${LC_MESSAGES:-${LANGUAGE:-${LANG:-}}}}"
+    loc="${loc%%:*}"              # LANGUAGE peut lister plusieurs langues
+    if [[ "${loc,,}" == fr* ]]; then
+        LANG_CODE='fr'
+        CATALOG_FR
+    else
+        LANG_CODE='en'
+        CATALOG_EN
+    fi
+    return 0
+}
+
+# t CLÉ [ARG…] -> TXT, les marques {1}, {2}… étant remplacées dans l'ordre.
+# Substitution par découpage et non par ${var//motif/texte} : un argument peut
+# contenir « & » ou « \ », caractères spéciaux du remplacement de motif (un
+# filtre saisi, par exemple).
+t() {
+    local s="${TR[${1:-?}]:-}" k head tail
+    shift
+    local -i n=0
+    for k in "$@"; do
+        n=$(( n + 1 ))
+        [[ "${s}" == *"{${n}}"* ]] || continue
+        head="${s%%"{${n}}"*}"
+        tail="${s#*"{${n}}"}"
+        s="${head}${k}${tail}"
+    done
+    TXT="${s}"
+    return 0
+}
+
+# Avertissement de configuration : « fichier:ligne: » puis le message de TXT.
+# Le préfixe est construit ici pour que LOAD_CONFIG ne passe pas CONFIG en
+# argument à une fonction depuis sa boucle « done < ${CONFIG} » : ShellCheck y
+# verrait une écriture dans le fichier en cours de lecture (SC2094).
+CFG_WARN() {
+    local -i n="${1:-0}"
+    WARN "${CONFIG}:${n}: ${TXT}"
+    return 0
+}
+
+CATALOG_FR() {
+    TR=(
+        [err]='Erreur'
+        [warn]='Attention'
+        [sep]=' : '
+
+        [cfg_bool]='{1} doit valoir 0 ou 1 (ligne ignorée)'
+        [cfg_unreadable]='{1} illisible : configuration ignorée'
+        [cfg_badline]='ligne ignorée (format attendu CLÉ=VALEUR)'
+        [cfg_interval]='INTERVAL attend un entier 0..{1} (ignoré)'
+        [cfg_kernel]='KERNEL doit valoir 0, 1 ou 2 (ignoré)'
+        [cfg_sort]='tri « {1} » inconnu (ignoré)'
+        [cfg_key]='clé inconnue « {1} » (ignorée)'
+        [cfg_badlines]='{1} ligne(s) de {2} ignorée(s)'
+
+        [arg_needs]="l'option {1} attend un argument."
+        [arg_watch]='{1} attend un entier entre 0 et {2}.'
+        [arg_nmax]='--N trop grand (maximum 10000).'
+        [arg_unknown]='option inconnue : {1}'
+        [arg_unexpected]='argument inattendu : {1}'
+        [arg_kernel]='--kernel et --kernel-only sont incompatibles.'
+
+        [env_home]='ni HOME ni XDG_CONFIG_HOME/XDG_CACHE_HOME : impossible de situer la configuration.'
+        [dep_ps]='commande ps introuvable.'
+        [dep_awk]='commande awk introuvable.'
+        [cache_fail]='impossible de créer {1} : journal et défilement désactivés'
+        [term_small]='terminal trop petit ({1}x{2}), minimum {3}x{4}.'
+        [filter_invalid]='filtre invalide (expression régulière) : {1}'
+        [gawk_bs]='dans gawk, « \b » est un backspace : utilisez « \y » pour une limite de mot'
+
+        [st_invalid]='invalide'
+        [st_frozen]='GEL'
+        [st_tree]='arbre'
+
+        [det_process]='processus'
+        [det_gone]='PID {1} : plus présent'
+        [det_user]='utilisateur'
+        [det_state]='état'
+        [det_rss]='mémoire (RSS)'
+        [det_pss]='mémoire (PSS)'
+        [det_virt]='virtuelle'
+        [det_io_r]='E/S lues'
+        [det_io_w]='E/S écrites'
+        [det_age]='âge'
+        [det_file]='fich.'
+        [det_title]=' DÉTAILS — {1} {2} '
+        [det_frozen]='· GEL '
+        [det_hint]='↑ ↓ / PgUp PgDn défilent   ·   x = TERM   ·   X = KILL   ·   une autre touche ferme'
+
+        [kill_title]=' TERMINER — {1} {2} '
+        [kill_q]=' envoyer {1} à {2} ?'
+        [kill_hint]='y = envoyer   ·   toute autre touche = annuler'
+        [flash_select]=' aucune sélection : ↑/↓ puis x (TERM) ou X (KILL) '
+        [flash_init]=" refus : PID 1 est init, on n'y touche pas "
+        [flash_ancestor]=" refus : {1} ({2}) est psim ou l'un de ses parents "
+        [flash_cancel]=' annulé : rien envoyé à {1} '
+        [flash_sent]=' {1} envoyé à {2} ({3}) '
+        [flash_denied]=' échec {1} {2} ({3}) : permission refusée '
+        [flash_gone]=' {1} ({2}) avait déjà disparu '
+
+        [log_duration]='durée       : {1}s'
+        [log_user]='utilisateur : {1}'
+        [log_term]='terminal    : {1}x{2} ({3})'
+        [log_ps]='ps          : {1} ({2})'
+        [log_awk]='awk         : {1} ({2})'
+        [log_sort]='tri         : {1} | filtre : {2}'
+        [log_newbie]='newbie      : {1} | noyau : {2} | options : {3}'
+        [log_head]='entête      : {1} | pied : {2} | couleur : {3}'
+
+        [unit_gio]='Gio'
+        [unit_mio]='Mio'
+        [unit_kio]='Kio'
+        [age_day]='j'
+
+        [help_title]=' AIDE — raccourcis '
+        [help_title_short]=' AIDE '
+        [help_close]='une touche pour fermer'
+    )
+    HK=( 'c' 'C' 'm' 'p' 'P' 'N' 'u' 'M' 'o' 'k' 'h' 'f' '/' '- / +'
+         'F' '↑ / ↓' 'clic' 'double-clic' 'PgUp / PgDn' 'Début / Fin' 'Échap'
+         'Entrée / d' 'x / X' '← / →'
+         't' 'q' '?' )
+    HD=( 'trier par %CPU' 'trier par commande' 'trier par mémoire' 'trier par PID'
+         'trier par PPID' 'trier par nice' 'trier par utilisateur' '%CPU : cœur / machine'
+         'options des commandes' 'threads noyau (cycle)' 'entête on / off'
+         'pied de page on / off' 'filtrer (Entrée / Échap)'
+         'augmenter / diminuer le taux de rafraîchissement'
+         'gel / dégel' 'sélectionner (tenir = accélère)'
+         'sélectionner la ligne' 'détails du processus' "défiler d'une page"
+         'premier / dernier' 'relâcher la sélection' 'détails du processus (défile)'
+         'TERM / KILL (y, ou dans les détails)' 'simplifié / étendu'
+         'arbre on / off' 'quitter' 'cette aide' )
+    return 0
+}
+
+CATALOG_EN() {
+    TR=(
+        [err]='Error'
+        [warn]='Warning'
+        [sep]=': '
+
+        [cfg_bool]='{1} must be 0 or 1 (line ignored)'
+        [cfg_unreadable]='{1} unreadable: configuration ignored'
+        [cfg_badline]='line ignored (expected KEY=VALUE)'
+        [cfg_interval]='INTERVAL expects an integer 0..{1} (ignored)'
+        [cfg_kernel]='KERNEL must be 0, 1 or 2 (ignored)'
+        [cfg_sort]='unknown sort « {1} » (ignored)'
+        [cfg_key]='unknown key « {1} » (ignored)'
+        [cfg_badlines]='{1} line(s) of {2} ignored'
+
+        [arg_needs]='option {1} requires an argument.'
+        [arg_watch]='{1} expects an integer between 0 and {2}.'
+        [arg_nmax]='--N too large (maximum 10000).'
+        [arg_unknown]='unknown option: {1}'
+        [arg_unexpected]='unexpected argument: {1}'
+        [arg_kernel]='--kernel and --kernel-only are mutually exclusive.'
+
+        [env_home]='neither HOME nor XDG_CONFIG_HOME/XDG_CACHE_HOME: cannot locate the configuration.'
+        [dep_ps]='ps command not found.'
+        [dep_awk]='awk command not found.'
+        [cache_fail]='cannot create {1}: log and scrolling disabled'
+        [term_small]='terminal too small ({1}x{2}), minimum {3}x{4}.'
+        [filter_invalid]='invalid filter (regular expression): {1}'
+        [gawk_bs]='in gawk, « \b » is a backspace: use « \y » for a word boundary'
+
+        [st_invalid]='invalid'
+        [st_frozen]='FROZEN'
+        [st_tree]='tree'
+
+        [det_process]='process'
+        [det_gone]='PID {1}: no longer present'
+        [det_user]='user'
+        [det_state]='state'
+        [det_rss]='memory (RSS)'
+        [det_pss]='memory (PSS)'
+        [det_virt]='virtual'
+        [det_io_r]='read I/O'
+        [det_io_w]='written I/O'
+        [det_age]='age'
+        [det_file]='file'
+        [det_title]=' DETAILS — {1} {2} '
+        [det_frozen]='· FROZEN '
+        [det_hint]='↑ ↓ / PgUp PgDn scroll   ·   x = TERM   ·   X = KILL   ·   any other key closes'
+
+        [kill_title]=' KILL — {1} {2} '
+        [kill_q]=' send {1} to {2} ?'
+        [kill_hint]='y = send   ·   any other key = cancel'
+        [flash_select]=' no selection: ↑/↓ then x (TERM) or X (KILL) '
+        [flash_init]=' refused: PID 1 is init, hands off '
+        [flash_ancestor]=' refused: {1} ({2}) is psim or one of its parents '
+        [flash_cancel]=' cancelled: nothing sent to {1} '
+        [flash_sent]=' {1} sent to {2} ({3}) '
+        [flash_denied]=' {1} {2} ({3}) failed: permission denied '
+        [flash_gone]=' {1} ({2}) had already exited '
+
+        [log_duration]='duration    : {1}s'
+        [log_user]='user        : {1}'
+        [log_term]='terminal    : {1}x{2} ({3})'
+        [log_ps]='ps          : {1} ({2})'
+        [log_awk]='awk         : {1} ({2})'
+        [log_sort]='sort        : {1} | filter: {2}'
+        [log_newbie]='newbie      : {1} | kernel: {2} | options: {3}'
+        [log_head]='header      : {1} | footer: {2} | colour: {3}'
+
+        [unit_gio]='GiB'
+        [unit_mio]='MiB'
+        [unit_kio]='KiB'
+        [age_day]='d'
+
+        [help_title]=' HELP — shortcuts '
+        [help_title_short]=' HELP '
+        [help_close]='press any key to close'
+    )
+    HK=( 'c' 'C' 'm' 'p' 'P' 'N' 'u' 'M' 'o' 'k' 'h' 'f' '/' '- / +'
+         'F' '↑ / ↓' 'click' 'double-click' 'PgUp / PgDn' 'Home / End' 'Esc'
+         'Enter / d' 'x / X' '← / →'
+         't' 'q' '?' )
+    HD=( 'sort by %CPU' 'sort by command' 'sort by memory' 'sort by PID'
+         'sort by PPID' 'sort by nice' 'sort by user' '%CPU: per core / machine'
+         'command options' 'kernel threads (cycle)' 'header on / off'
+         'footer on / off' 'filter (Enter / Esc)'
+         'increase / decrease refresh rate'
+         'freeze / thaw' 'select (hold to accelerate)'
+         'select the row' 'process details' 'scroll one page'
+         'first / last' 'release the selection' 'process details (scrolls)'
+         'TERM / KILL (y, or from details)' 'compact / extended'
+         'tree on / off' 'quit' 'this help' )
+    return 0
+}
+
+##############################################################################
 # Utilitaires
 ##############################################################################
-ERR() { printf '%sErreur%s : %s\n' "${RougeBold}" "${Reset}" "$*" >&2; }
-WARN() { printf '%sAttention%s : %s\n' "${Jaune}" "${Reset}" "$*" >&2; }
+# Le séparateur avant le message vient du catalogue : le français écrit
+# « Erreur : », l'anglais « Error: » (espace avant les deux-points d'un côté,
+# aucune de l'autre).
+ERR() { t err; printf '%s%s%s%s%s\n' "${RougeBold}" "${TXT}" "${Reset}" "${TR[sep]}" "$*" >&2; }
+WARN() { t warn; printf '%s%s%s%s%s\n' "${Jaune}" "${TXT}" "${Reset}" "${TR[sep]}" "$*" >&2; }
 
 RESTORE_SCREEN() {
     if (( ALT == 1 )); then
@@ -166,7 +417,8 @@ SET_BOOL() {  # SET_BOOL NOM VALEUR NUMÉRO_DE_LIGNE
     local -i line="$3"
     case "${val}" in
         0|1) printf -v "${name}" '%s' "${val}" ;;
-        *)   WARN "${CONFIG}:${line}: ${name} doit valoir 0 ou 1 (ligne ignorée)"; return 1 ;;
+        *)   t cfg_bool "${name}"
+             CFG_WARN "${line}"; return 1 ;;
     esac
     return 0
 }
@@ -177,7 +429,8 @@ LOAD_CONFIG() {
 
     [[ -f "${CONFIG}" ]] || return 0
     if [[ ! -r "${CONFIG}" ]]; then
-        WARN "${CONFIG} illisible : configuration ignorée"
+        t cfg_unreadable "${CONFIG}"
+        WARN "${TXT}"
         return 0
     fi
 
@@ -189,7 +442,8 @@ LOAD_CONFIG() {
         [[ -z "${line}" ]] && continue
 
         if [[ ! "${line}" =~ ^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*(.*)$ ]]; then
-            WARN "${CONFIG}:${n}: ligne ignorée (format attendu CLÉ=VALEUR)"
+            t cfg_badline
+            CFG_WARN "${n}"
             bad=$((bad + 1))
             continue
         fi
@@ -210,7 +464,8 @@ LOAD_CONFIG() {
                     (( INTERVAL == 0 )) && STATIC=1
                     (( INTERVAL >= INTERVAL_MAX )) && FREEZE=1
                 else
-                    WARN "${CONFIG}:${n}: INTERVAL attend un entier 0..${INTERVAL_MAX} (ignoré)"
+                    t cfg_interval "${INTERVAL_MAX}"
+                    CFG_WARN "${n}"
                     bad=$((bad + 1))
                 fi
                 ;;
@@ -218,7 +473,8 @@ LOAD_CONFIG() {
                 if [[ "${val}" =~ ^[0-2]$ ]]; then
                     KERNEL="${val}"
                 else
-                    WARN "${CONFIG}:${n}: KERNEL doit valoir 0, 1 ou 2 (ignoré)"
+                    t cfg_kernel
+                    CFG_WARN "${n}"
                     bad=$((bad + 1))
                 fi
                 ;;
@@ -226,19 +482,24 @@ LOAD_CONFIG() {
                 case "${val}" in
                     pid|-pid|ppid|-ppid|user|-user|cmd|-cmd|rss|-rss|%cpu|-%cpu|%mem|-%mem|nice|-nice)
                         SORT="${val}" ;;
-                    *) WARN "${CONFIG}:${n}: tri « ${val} » inconnu (ignoré)"; bad=$((bad + 1)) ;;
+                    *) t cfg_sort "${val}"
+                       CFG_WARN "${n}"; bad=$((bad + 1)) ;;
                 esac
                 ;;
             STATS) : ;;   # ancienne clé, sans effet
             FILTER) FILTER="${val}" ;;
             *)
-                WARN "${CONFIG}:${n}: clé inconnue « ${key} » (ignorée)"
+                t cfg_key "${key}"
+                CFG_WARN "${n}"
                 bad=$((bad + 1))
                 ;;
         esac
     done < "${CONFIG}"
 
-    (( bad == 0 )) || WARN "${bad} ligne(s) de ${CONFIG} ignorée(s)"
+    if (( bad != 0 )); then
+        t cfg_badlines "${bad}" "${CONFIG}"
+        WARN "${TXT}"
+    fi
     return 0
 }
 
@@ -248,6 +509,15 @@ LOAD_CONFIG() {
 VERSION() { printf 'version %s%s%s — %s\n' "${Jaune}" "${VER}" "${Reset}" "${NAME}"; return 0; }
 
 USAGE() {
+    if [[ "${LANG_CODE}" == 'fr' ]]; then
+        USAGE_FR
+    else
+        USAGE_EN
+    fi
+    return 0
+}
+
+USAGE_FR() {
     cat <<EOF
 ${Vert}USAGE${Reset}
    ${Jaune}${NAME}${Reset} [OPTIONS] [--N]
@@ -283,9 +553,54 @@ EOF
     return 0
 }
 
+USAGE_EN() {
+    cat <<EOF
+${Vert}USAGE${Reset}
+   ${Jaune}${NAME}${Reset} [OPTIONS] [--N]
+
+${Vert}OPTIONS${Reset}
+   ${Bleu}-p, --pid${Reset}              sort by PID
+   ${Bleu}-P, --ppid${Reset}             sort by PPID
+   ${Bleu}-m, --mem${Reset}              sort by resident memory
+   ${Bleu}-c, --cpu${Reset}              sort by %CPU
+   ${Bleu}-N, --nice${Reset}             sort by nice value (NI)
+   ${Bleu}-u, --user${Reset}             sort by owner
+   ${Bleu}-C, --cmd${Reset}              sort by command
+   ${Bleu}-t, --tree${Reset}             process hierarchy (ppid tree)
+   ${Bleu}    --no-tree${Reset}          cancel --tree
+   ${Bleu}-n, --newbie${Reset}           compact view (PID USER MiB %CPU CMD)
+   ${Bleu}    --normal${Reset}           full columns (cancels --newbie)
+   ${Bleu}-k, --kernel${Reset}           include kernel threads
+   ${Bleu}-K, --kernel-only${Reset}      kernel threads only
+   ${Bleu}-g, --filter PATTERN${Reset}   ERE filter (user + command + arguments)
+   ${Bleu}-w, --watch N${Reset}          refresh every N s (0 = static)
+   ${Bleu}-H, --no-header${Reset}        hide the header
+   ${Bleu}-F, --no-footer${Reset}        hide the footer
+   ${Bleu}-O, --fullcmd${Reset}          full path and arguments
+   ${Bleu}-0, --no-color${Reset}         no colours
+   ${Bleu}-M, --machine-cpu${Reset}      %CPU of rows as a share of the machine (default: per core)
+   ${Bleu}    --per-core${Reset}         %CPU of rows per core (default)
+   ${Bleu}    --no-config${Reset}        ignore the configuration file
+   ${Bleu}    --debug${Reset}            do not hide ps/awk errors
+   ${Bleu}    --N${Reset}                first N processes, once (N=0: all)
+   ${Bleu}-v, --version${Reset}          version
+   ${Bleu}-h, --help${Reset}             this help
+EOF
+    return 0
+}
+
 HELP() {
     VERSION
     USAGE
+    if [[ "${LANG_CODE}" == 'fr' ]]; then
+        HELP_FR
+    else
+        HELP_EN
+    fi
+    return 0
+}
+
+HELP_FR() {
     cat <<EOF
 
 ${Vert}DESCRIPTION${Reset}
@@ -364,6 +679,86 @@ EOF
     return 0
 }
 
+HELP_EN() {
+    cat <<EOF
+
+${Vert}DESCRIPTION${Reset}
+   ${Jaune}${NAME}${Reset} formats the output of ${Jaune}ps${Reset}: colours, aligned columns,
+   totals, sort, filter. Two modes:
+     • ${Bleu}dynamic${Reset} : continuous refresh + shortcuts (default on a terminal);
+     • ${Bleu}static${Reset}  : a single screen (--N, --watch 0, or redirected output).
+
+${Vert}FOOTER${Reset}
+   ${Jaune}TOTAL (displayed)${Reset} sums the displayed rows: RSS under ${Jaune}MiB${Reset}, %MEM under ${Jaune}%MEM${Reset},
+   and ${Jaune}%CPU${Reset} in the ${Jaune}same unit as the rows${Reset}: 100 % = 1 core by default,
+   or a share of the machine after the ${Jaune}M${Reset} key / ${Jaune}--machine-cpu${Reset}
+   (the column is then titled ${Jaune}%CPU/m${Reset}, psim's own behaviour).
+
+${Vert}SHORTCUTS (dynamic)${Reset}
+   /  filter     Enter apply  Esc cancel       Ctrl-U clear
+   c/m/p/P/N/u/C sort           o  options      M  machine %CPU
+   t  tree      k  kernel
+   h  header    f  footer       ?  help         q  quit
+   +/-  interval  F  freeze/thaw  ←/→  compact/extended
+   ↑/↓  select (the view follows at the edges; holding the key accelerates)
+         Esc  release
+   click  select the row   double-click: process details
+         (Shift+click: the terminal's own text selection still works)
+   Enter / d  details of the selected process (any key closes the box,
+   x / X also end that process, after the same confirmation as in the list)
+   ↑/↓  PgUp/PgDn  Home/End  scroll the panel: a very long command line
+   is wrapped over several lines and shown in full.
+   PgUp/PgDn  scroll one page   Home/End  top / bottom of the list
+   x  TERM  and  X  KILL  on the selected process, after confirmation (y).
+   PID 1, psim and its own parents are refused.
+   ?  overlay help: the full list of shortcuts. The status
+      (filter, freeze, scrolling) appears to the right of the header whenever
+      there is something to report, or on a line at the bottom if the header
+      is hidden.
+
+${Vert}INTERACTIVE FILTER${Reset}
+   ${Jaune}/${Reset} opens the prompt: the pattern is built character by character and the list
+   filters live (Enter applies, Esc cancels, Backspace deletes, Ctrl-U clears).
+   An invalid pattern empties the list and shows ${RougeBold}invalid${Reset} in the status.
+
+${Vert}TREE${Reset}
+   ${Jaune}t${Reset} (or ${Jaune}--tree${Reset}) files each process under its parent; the active sort
+   order becomes the sibling order. A process whose parent is absent from the
+   list (filtered out, or gone from ps) moves to the root: you get a forest,
+   never a cut branch. Indentation comes out of the command and argument
+   columns, not the rest of the table; the PIDs do not move.
+
+${Vert}PIPE / REDIRECTION${Reset}
+   Without a terminal, ${Jaune}${NAME}${Reset} goes static: no colours, no escapes,
+   no truncation, no padding: ${Jaune}${NAME} > list.txt${Reset}, ${Jaune}${NAME} | grep ssh${Reset},
+   ${Jaune}${NAME} -k | wc -l${Reset} behave as with ${Jaune}ps${Reset}.
+
+${Vert}CONFIGURATION${Reset}
+   ${Bleu}${CONFIG}${Reset} — one key per line, ${Jaune}KEY=VALUE${Reset}.
+   Keys: NEWBIE INTERVAL KERNEL SORT FILTER SHOW_OPTS HEADER FOOTER
+         NO_COLOR LOG DEBUG CPU_MODE TREE (STATS: legacy key, no effect)
+   The file is never evaluated as shell; unknown keys are reported and
+   ignored. ${Jaune}--no-config${Reset} skips it entirely: the session starts from
+   the defaults (useful when the configuration sets TREE=1 or INTERVAL=0 and
+   you want the raw table).
+
+${Vert}EXAMPLES${Reset}
+   ${Jaune}${NAME}${Reset}                       real-time monitor
+   ${Jaune}${NAME} -g 'firefox|telegram'${Reset}  filter (ERE of the installed awk)
+   ${Jaune}${NAME} --20${Reset}                  first 20 processes
+   ${Jaune}${NAME} -K --0${Reset}                kernel threads only
+   ${Jaune}${NAME} -k | grep kworker${Reset}     inside a pipe
+
+${Vert}FILES${Reset}
+   ${Bleu}${CONFIG}${Reset}              configuration
+   ${Bleu}${CACHE_DIR:-~/.cache/${CONF_NAME}}/log${Reset}   log (LOG=1, rotated at 256 KiB)
+
+${Vert}LICENSE${Reset}
+   GPLv3 — original author jotenakis.
+EOF
+    return 0
+}
+
 # Éclate une option courte groupée : -pn -> -p -n, -w5 -> -w 5, -ngfirefox -> -n -g firefox
 EXPAND_CLUSTER() {
     local rest="${1#-}" c
@@ -390,7 +785,8 @@ EXPAND_CLUSTER() {
 
 NEED_ARG() {
     [[ -n "${2}" ]] && return 0
-    ERR "l'option ${1} attend un argument."
+    t arg_needs "${1}"
+    ERR "${TXT}"
     QUIT 2
 }
 
@@ -446,7 +842,8 @@ PARSE_ARGS() {
                 # ${#2} : un entier de 19 chiffres déborde en négatif et
                 # passerait le test, pour finir en « sleep: invalid option »
                 if [[ ! "${2}" =~ ^[0-9]+$ ]] || (( ${#2} > 4 )) || (( 10#${2} > INTERVAL_MAX )); then
-                    ERR "${arg} attend un entier entre 0 et ${INTERVAL_MAX}."
+                    t arg_watch "${arg}" "${INTERVAL_MAX}"
+                    ERR "${TXT}"
                     QUIT 2
                 fi
                 INTERVAL=$((10#${2}))
@@ -468,14 +865,16 @@ PARSE_ARGS() {
                 fi
                 if [[ "${arg}" =~ ^--([0-9]+)$ ]]; then
                     if (( ${#BASH_REMATCH[1]} > 6 )) || (( 10#${BASH_REMATCH[1]} > 10000 )); then
-                        ERR "--N trop grand (maximum 10000)."
+                        t arg_nmax
+                        ERR "${TXT}"
                         QUIT 2
                     fi
                     LIMIT=$((10#${BASH_REMATCH[1]}))
                     STATIC=1
                     shift
                 else
-                    ERR "option inconnue : ${arg}"
+                    t arg_unknown "${arg}"
+                    ERR "${TXT}"
                     USAGE >&2
                     QUIT 2
                 fi
@@ -487,24 +886,28 @@ PARSE_ARGS() {
                     set -- "${CLUSTER_ARGS[@]}" "$@"
                     continue
                 fi
-                ERR "option inconnue : ${arg}"
+                t arg_unknown "${arg}"
+                ERR "${TXT}"
                 USAGE >&2
                 QUIT 2
                 ;;
             *)
-                ERR "argument inattendu : ${arg}"
+                t arg_unexpected "${arg}"
+                ERR "${TXT}"
                 QUIT 2
                 ;;
         esac
     done
 
     if (( $# > 0 )); then
-        ERR "argument inattendu : $1"
+        t arg_unexpected "$1"
+        ERR "${TXT}"
         QUIT 2
     fi
 
     if (( k == 1 && konly == 1 )); then
-        ERR "--kernel et --kernel-only sont incompatibles."
+        t arg_kernel
+        ERR "${TXT}"
         QUIT 2
     fi
     (( konly == 1 )) && KERNEL=2
@@ -535,7 +938,8 @@ INIT_PATHS() {
     local cfg_home cache_home
     # set -u ferait mourir bash sur « HOME: unbound variable », sans diagnostic
     if [[ -z "${HOME:-}" && -z "${XDG_CONFIG_HOME:-}" && -z "${XDG_CACHE_HOME:-}" ]]; then
-        ERR "ni HOME ni XDG_CONFIG_HOME/XDG_CACHE_HOME : impossible de situer la configuration."
+        t env_home
+        ERR "${TXT}"
         return 1
     fi
     cfg_home="${XDG_CONFIG_HOME:-${HOME:-}/.config}"
@@ -554,8 +958,8 @@ CHECK_DEPS() {
     local -i missing=0
     PS_BIN=$(command -v ps 2>/dev/null || true)
     AWK_BIN=$(command -v awk 2>/dev/null || true)
-    if [[ -z "${PS_BIN}" ]]; then ERR "commande ps introuvable."; missing=1; fi
-    if [[ -z "${AWK_BIN}" ]]; then ERR "commande awk introuvable."; missing=1; fi
+    if [[ -z "${PS_BIN}" ]]; then t dep_ps; ERR "${TXT}"; missing=1; fi
+    if [[ -z "${AWK_BIN}" ]]; then t dep_awk; ERR "${TXT}"; missing=1; fi
     (( missing == 0 )) || QUIT 1
     ME="${USER:-}"
     [[ -n "${ME}" ]] || ME=$(id -un 2>/dev/null || printf '?')
@@ -597,7 +1001,8 @@ COLLECT_EXCLUDES() {
 
 PREPARE_CACHE() {
     if ! mkdir -p "${CACHE_DIR}" 2>/dev/null; then
-        WARN "impossible de créer ${CACHE_DIR} : journal et défilement désactivés"
+        t cache_fail "${CACHE_DIR}"
+        WARN "${TXT}"
         CACHE_DIR=""
         DRAW_FILE=""
         LOG_FILE=""
@@ -1108,27 +1513,27 @@ STATUS_BUILD() {
     status_p=''
     status_c=''
     if :; then
-        local caret=''
+        local caret='' inv="${TR[st_invalid]}" frz="${TR[st_frozen]}" tre="${TR[st_tree]}"
         (( FILTER_EDIT == 1 )) && caret='_'
         if [[ -n "${FILTER}" || ${FILTER_EDIT} -eq 1 ]]; then
             status_p+=" /${FILTER}${caret}"
             if (( FILTER_INVALID == 1 )); then
-                status_p+=' invalide'
-                status_c+=" ${Jaune}/${FILTER}${caret}${ResetFg} ${RougeBold}invalide${ResetFg}"
+                status_p+=" ${inv}"
+                status_c+=" ${Jaune}/${FILTER}${caret}${ResetFg} ${RougeBold}${inv}${ResetFg}"
             else
                 status_c+=" ${Jaune}/${FILTER}${caret}${ResetFg}"
             fi
         fi
         if (( FREEZE == 1 )); then
-            status_p+=" ${ICON_CLOCK} GEL"
-            status_c+=" ${RougeBold}${ICON_CLOCK} GEL${ResetFg}"
+            status_p+=" ${ICON_CLOCK} ${frz}"
+            status_c+=" ${RougeBold}${ICON_CLOCK} ${frz}${ResetFg}"
         elif (( INTERVAL != 1 )); then
             status_p+=" ${ICON_CLOCK} ${INTERVAL}s"
             status_c+=" ${Gris}${ICON_CLOCK} ${INTERVAL}s${ResetFg}"
         fi
         if (( TREE == 1 )); then
-            status_p+=" arbre"
-            status_c+=" ${Cyan}arbre${ResetFg}"
+            status_p+=" ${tre}"
+            status_c+=" ${Cyan}${tre}${ResetFg}"
         fi
         if (( OFFSET > 0 )); then
             status_p+=" +${OFFSET}"
@@ -1575,20 +1980,8 @@ HELP_OVERLAY() {
     local desc
     local kpad dpad line hint title hz bv tl tr bl br bg reset
 
-    ktxt=( 'c' 'C' 'm' 'p' 'P' 'N' 'u' 'M' 'o' 'k' 'h' 'f' '/' '- / +'
-           'F' '↑ / ↓' 'clic' 'double-clic' 'PgUp / PgDn' 'Début / Fin' 'Échap'
-           'Entrée / d' 'x / X' '← / →'
-           't' 'q' '?' )
-    dtxt=( 'trier par %CPU' 'trier par commande' 'trier par mémoire' 'trier par PID'
-           'trier par PPID' 'trier par nice' 'trier par utilisateur' '%CPU : cœur / machine'
-           'options des commandes' 'threads noyau (cycle)' 'entête on / off'
-           'pied de page on / off' 'filtrer (Entrée / Échap)'
-           'augmenter / diminuer le taux de rafraîchissement'
-           'gel / dégel' 'sélectionner (tenir = accélère)'
-           'sélectionner la ligne' 'détails du processus' "défiler d'une page" 
-           'premier / dernier' 'relâcher la sélection' 'détails du processus (défile)'
-           'TERM / KILL (y, ou dans les détails)' 'simplifié / étendu'
-           'arbre on / off' 'quitter' 'cette aide' )
+    ktxt=( "${HK[@]}" )
+    dtxt=( "${HD[@]}" )
     n=${#ktxt[@]}
 
     if (( NO_COLOR == 0 )); then
@@ -1646,8 +2039,8 @@ HELP_OVERLAY() {
     inner=$(( bw - 2 ))
 
     # bord supérieur, titre inclus
-    title=' AIDE — raccourcis '
-    (( ${#title} > inner )) && title=' AIDE '
+    title="${TR[help_title]}"
+    (( ${#title} > inner )) && title="${TR[help_title_short]}"
     line="${tl}${hz}${title}"
     while (( ${#line} < bw - 1 )); do line+="${hz}"; done
     line+="${tr}"
@@ -1674,7 +2067,7 @@ HELP_OVERLAY() {
         printf '%s\033[%d;%dH%s%s%s\033[K' "${bg}" "$(( y0 + 1 + r ))" "${x0}" "${Blanc}" "${line}" "${reset}"
     done
 
-    hint='une touche pour fermer'
+    hint="${TR[help_close]}"
     pad=$(( (inner - ${#hint}) / 2 ))
     (( pad < 1 )) && pad=1
     line="${bv}$(printf '%*s' "${pad}" '')${Gris}${hint}${ResetFg}"
@@ -1710,11 +2103,11 @@ FMT_SIZE() {
     local -i kb="${1:-0}"
     (( kb < 0 )) && kb=0
     if (( kb >= 1048576 )); then
-        printf -v SIZE_STR '%d Gio' $(( kb / 1048576 ))
+        printf -v SIZE_STR '%d %s' $(( kb / 1048576 )) "${TR[unit_gio]}"
     elif (( kb >= 1024 )); then
-        printf -v SIZE_STR '%d Mio' $(( kb / 1024 ))
+        printf -v SIZE_STR '%d %s' $(( kb / 1024 )) "${TR[unit_mio]}"
     else
-        printf -v SIZE_STR '%d Kio' "${kb}"
+        printf -v SIZE_STR '%d %s' "${kb}" "${TR[unit_kio]}"
     fi
     return 0
 }
@@ -1727,7 +2120,7 @@ FMT_AGE() {
     h=$(( (s % 86400) / 3600 ))
     m=$(( (s % 3600) / 60 ))
     if (( d > 0 )); then
-        printf -v AGE_STR '%dj %02dh%02d' "${d}" "${h}" "${m}"
+        printf -v AGE_STR '%d%s %02dh%02d' "${d}" "${TR[age_day]}" "${h}" "${m}"
     elif (( h > 0 )); then
         printf -v AGE_STR '%dh %02dm' "${h}" "${m}"
     elif (( m > 0 )); then
@@ -1840,7 +2233,8 @@ PROC_INFO() {
 
     if [[ ! -r "${pdir}/stat" ]]; then
         present=0
-        DET_PUSH 'processus' "PID ${pid} : plus présent"
+        t det_gone "${pid}"
+        DET_PUSH "${TR[det_process]}" "${TXT}"
     fi
 
     if (( present == 1 )); then
@@ -1931,13 +2325,13 @@ PROC_INFO() {
 
         DET_PUSH 'PID' "${pid}"
         DET_PUSH 'PPID' "${ppid}"
-        DET_PUSH 'utilisateur' "${user}"
-        DET_PUSH 'état' "${state}"
+        DET_PUSH "${TR[det_user]}" "${user}"
+        DET_PUSH "${TR[det_state]}" "${state}"
         DET_PUSH 'threads' "${sf[17]:-${threads}}"
         DET_PUSH 'nice' "${nice}"
         if [[ -n "${vmrss}" ]]; then
             FMT_SIZE "${vmrss}"
-            DET_PUSH 'mémoire (RSS)' "${SIZE_STR}"
+            DET_PUSH "${TR[det_rss]}" "${SIZE_STR}"
         fi
         if (( pss >= 0 )); then
             FMT_SIZE "${pss}"
@@ -1947,7 +2341,7 @@ PROC_INFO() {
                 anon_s="${SIZE_STR}"
                 FMT_SIZE "${pss_file}"
                 file_s="${SIZE_STR}"
-                pss_txt+=" (anon ${anon_s} · fich. ${file_s}"
+                pss_txt+=" (anon ${anon_s} · ${TR[det_file]} ${file_s}"
                 if (( pss_shm > 0 )); then
                     FMT_SIZE "${pss_shm}"
                     shm_s="${SIZE_STR}"
@@ -1955,11 +2349,11 @@ PROC_INFO() {
                 fi
                 pss_txt+=')'
             fi
-            DET_PUSH 'mémoire (PSS)' "${pss_txt}"
+            DET_PUSH "${TR[det_pss]}" "${pss_txt}"
         fi
         if [[ -n "${vmsize}" ]]; then
             FMT_SIZE "${vmsize}"
-            DET_PUSH 'virtuelle' "${SIZE_STR}"
+            DET_PUSH "${TR[det_virt]}" "${SIZE_STR}"
         fi
         if [[ -n "${vmswap}" ]]; then
             FMT_SIZE "${vmswap}"
@@ -1967,16 +2361,16 @@ PROC_INFO() {
         fi
         if (( io_r >= 0 )); then
             FMT_SIZE $(( io_r / 1024 ))
-            DET_PUSH 'E/S lues' "${SIZE_STR}"
+            DET_PUSH "${TR[det_io_r]}" "${SIZE_STR}"
             FMT_SIZE $(( io_w / 1024 ))
-            DET_PUSH 'E/S écrites' "${SIZE_STR}"
+            DET_PUSH "${TR[det_io_w]}" "${SIZE_STR}"
         fi
         if (( oom >= 0 )); then
             DET_PUSH 'OOM score' "${oom} / 1000 (adj ${oomadj})"
         fi
         if (( started > 0 )); then
             FMT_AGE "${started}"
-            DET_PUSH 'âge' "${AGE_STR}"
+            DET_PUSH "${TR[det_age]}" "${AGE_STR}"
         fi
 
         if [[ -n "${cg}" ]]; then
@@ -2062,7 +2456,7 @@ DET_DRAW() {
     FREEZE=1
     STATUS_BUILD
     if (( y0 == 1 )); then
-        title+='· GEL '
+        title+="${TR[det_frozen]}"
     fi
     # fenêtre partielle : où l'on en est (le défilement se voit sans compter)
     if (( view < total )); then
@@ -2133,9 +2527,10 @@ DETAILS_OVERLAY() {
     (( DET_VIEW < 1 )) && DET_VIEW=1
     step=$(( DET_VIEW - 1 ))
     (( step < 1 )) && step=1
-    DET_HINT='↑ ↓ / PgUp PgDn défilent   ·   x = TERM   ·   X = KILL   ·   une autre touche ferme'
+    DET_HINT="${TR[det_hint]}"
     while :; do
-        DET_DRAW " DÉTAILS — ${pid} ${DET_NAME} "
+        t det_title "${pid}" "${DET_NAME}"
+        DET_DRAW "${TXT}"
         MODAL_KEY
         k="${MODAL_KEY}"
         case "${k}" in
@@ -2173,10 +2568,12 @@ CONFIRM_KILL() {
     PROC_INFO "${pid}"
     DET_TRIM $(( HEIGHT - 5 ))
     DET_SEP
-    q=" envoyer ${sig} à ${pid} ?"
+    t kill_q "${sig}" "${pid}"
+    q="${TXT}"
     DET_RAW "${RougeBold}${q}${DET_RST}" "${#q}"
-    DET_HINT='y = envoyer   ·   toute autre touche = annuler'
-    DET_DRAW " TERMINER — ${pid} ${DET_NAME} "
+    DET_HINT="${TR[kill_hint]}"
+    t kill_title "${pid}" "${DET_NAME}"
+    DET_DRAW "${TXT}"
     MODAL_KEY
     hk="${MODAL_KEY}"
     DET_CLOSE
@@ -2227,31 +2624,36 @@ KILL_SELECTED() {
     KILL_OK=0
 
     if (( pid <= 0 )); then
-        FLASH ' aucune sélection : ↑/↓ puis x (TERM) ou X (KILL) '
+        FLASH "${TR[flash_select]}"
         return 0
     fi
     if (( pid == 1 )); then
-        FLASH ' refus : PID 1 est init, on n'"'"'y touche pas '
+        FLASH "${TR[flash_init]}"
         return 0
     fi
     COMM_OF "${pid}"
     IS_ANCESTOR "${pid}"
     if (( ISANC == 1 )); then
-        FLASH " refus : ${pid} (${CMDNAME}) est psim ou l'un de ses parents "
+        t flash_ancestor "${pid}" "${CMDNAME}"
+        FLASH "${TXT}"
         return 0
     fi
     CONFIRM_KILL "${sig}" "${pid}"
     if (( ASKED == 0 )); then
-        FLASH " annulé : rien envoyé à ${pid} "
+        t flash_cancel "${pid}"
+        FLASH "${TXT}"
         return 0
     fi
     kill -s "${sig}" "${pid}" 2>/dev/null || KILL_OK=1
     if (( KILL_OK == 0 )); then
-        FLASH " ${sig} envoyé à ${pid} (${CMDNAME}) "
+        t flash_sent "${sig}" "${pid}" "${CMDNAME}"
+        FLASH "${TXT}"
     elif [[ -d "/proc/${pid}" ]]; then
-        FLASH " échec ${sig} ${pid} (${CMDNAME}) : permission refusée "
+        t flash_denied "${sig}" "${pid}" "${CMDNAME}"
+        FLASH "${TXT}"
     else
-        FLASH " ${pid} (${CMDNAME}) avait déjà disparu "
+        t flash_gone "${pid}" "${CMDNAME}"
+        FLASH "${TXT}"
     fi
     return 0
 }
@@ -2310,7 +2712,8 @@ RUN_DYNAMIC() {
         fi
         if (( WIDTH < MIN_W || HEIGHT < MIN_H )); then
             RESTORE_SCREEN
-            ERR "terminal trop petit (${WIDTH}x${HEIGHT}), minimum ${MIN_W}x${MIN_H}."
+            t term_small "${WIDTH}" "${HEIGHT}" "${MIN_W}" "${MIN_H}"
+            ERR "${TXT}"
             QUIT 1
         fi
         (( WIDTH < THIN_W )) && NEWBIE=1
@@ -2339,6 +2742,33 @@ ROTATE_LOG() {
     return 0
 }
 
+# Lignes du journal, à part : l'écriture est best-effort (« || true » dans
+# WRITE_LOG), et des appels de fonction dans un « || » désactiveraient set -e
+# pour elles (SC2310).
+LOG_BODY() {
+    local now
+    now=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || printf '-')
+    printf '=== %s — %s %s ===\n' "${now}" "${NAME}" "${VER}"
+    t log_duration "${SECONDS}"
+    printf '%s\n' "${TXT}"
+    t log_user "${ME}"
+    printf '%s\n' "${TXT}"
+    t log_term "${WIDTH}" "${HEIGHT}" "${TERM:-?}"
+    printf '%s\n' "${TXT}"
+    t log_ps "${PS_BIN}" "${psver}"
+    printf '%s\n' "${TXT}"
+    t log_awk "${AWK_BIN}" "${awkver}"
+    printf '%s\n' "${TXT}"
+    t log_sort "${SORT}" "${FILTER}"
+    printf '%s\n' "${TXT}"
+    t log_newbie "${NEWBIE}" "${KERNEL}" "${SHOW_OPTS}"
+    printf '%s\n' "${TXT}"
+    t log_head "${HEADER}" "${FOOTER}" "$(( NO_COLOR == 0 ? 1 : 0 ))"
+    printf '%s\n' "${TXT}"
+    printf '\n'
+    return 0
+}
+
 WRITE_LOG() {
     local psver awkver
     (( LOG == 1 )) && [[ -n "${LOG_FILE}" ]] || return 0
@@ -2346,19 +2776,8 @@ WRITE_LOG() {
     psver=$("${PS_BIN}" --version 2>/dev/null | head -n 1 || true)
     awkver=$("${AWK_BIN}" --version 2>/dev/null | head -n 1 || true)
     [[ -n "${awkver}" ]] || awkver=$("${AWK_BIN}" -W version 2>/dev/null | head -n 1 || true)
-    {
-        printf '=== %s — %s %s ===\n' "$(date '+%Y-%m-%d %H:%M:%S')" "${NAME}" "${VER}"
-        printf 'durée       : %ss\n' "${SECONDS}"
-        printf 'utilisateur : %s\n' "${ME}"
-        printf 'terminal    : %sx%s (%s)\n' "${WIDTH}" "${HEIGHT}" "${TERM:-?}"
-        printf 'ps          : %s (%s)\n' "${PS_BIN}" "${psver}"
-        printf 'awk         : %s (%s)\n' "${AWK_BIN}" "${awkver}"
-        printf 'tri         : %s | filtre : %s\n' "${SORT}" "${FILTER}"
-        printf 'newbie      : %s | noyau : %s | options : %s\n' "${NEWBIE}" "${KERNEL}" "${SHOW_OPTS}"
-        printf 'entête      : %s | pied : %s | couleur : %s\n' \
-            "${HEADER}" "${FOOTER}" "$(( NO_COLOR == 0 ? 1 : 0 ))"
-        printf '\n'
-    } >> "${LOG_FILE}" 2>/dev/null || true
+    # shellcheck disable=SC2310  # journal best-effort : un échec d'écriture ne doit pas faire sortir psim
+    LOG_BODY >> "${LOG_FILE}" 2>/dev/null || true
     chmod 600 "${LOG_FILE}" 2>/dev/null || true
     return 0
 }
@@ -2388,7 +2807,8 @@ VALIDATE_FILTER() {
         'BEGIN { f = ENVIRON["PSIM_FILTER"]; if (f != "" && "" !~ f) exit 0 }' \
         >/dev/null 2>&1 || rc=$?
     if (( rc != 0 )); then
-        ERR "filtre invalide (expression régulière) : ${FILTER}"
+        t filter_invalid "${FILTER}"
+        ERR "${TXT}"
         return 1
     fi
 
@@ -2397,7 +2817,8 @@ VALIDATE_FILTER() {
         local ver
         ver=$("${AWK_BIN}" --version 2>/dev/null | head -n 1 || true)
         if [[ "${ver}" == *"GNU Awk"* ]]; then
-            WARN "dans gawk, « \\b » est un backspace : utilisez « \\y » pour une limite de mot"
+            t gawk_bs
+            WARN "${TXT}"
         fi
     fi
     return 0
@@ -2407,6 +2828,7 @@ VALIDATE_FILTER() {
 # Main
 ##############################################################################
 MAIN() {
+    SET_LANG
     TTY=0
     [[ -t 1 ]] && TTY=1
     STDIN_TTY=0

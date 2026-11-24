@@ -1,37 +1,39 @@
 # psim
 
-`psim` met en forme la sortie de `ps` : tableau aligné, couleurs, totaux, tri,
-filtre, arbre des processus, et un mode dynamique avec raccourcis clavier.
-Le même binaire reste utilisable dans un pipe ou une redirection, sans séquence
-ANSI ni troncature.
+[Français](README.fr.md) · English
 
-Version 1.8.1 — GPLv3. Auteur original : jotenakis.
+`psim` formats the output of `ps`: an aligned table, colours, totals, sort,
+filter, process tree, and a dynamic mode with keyboard shortcuts.
+The same binary stays usable inside a pipe or a redirection, without ANSI
+sequences or truncation.
 
-## Fonctionnalités
+Version 1.9.0 — GPLv3. Original author: jotenakis.
 
-- **Mode dynamique** sur un terminal (rafraîchissement, tri, filtre, sélection,
-  détails, fin de processus) et **mode statique** avec `--N`, `--watch 0` ou
-  hors terminal.
-- **Tri** par PID, PPID, %CPU, mémoire résidente, nice, utilisateur ou commande.
-- **Filtre** ERE (utilisateur, commande, arguments), en option ou en direct avec
+## Features
+
+- **Dynamic mode** on a terminal (refresh, sort, filter, selection, details,
+  ending a process) and **static mode** with `--N`, `--watch 0` or outside a
+  terminal.
+- **Sort** by PID, PPID, %CPU, resident memory, nice, user or command.
+- **Filter** (ERE over user, command, arguments), as an option or live with
   `/`.
-- **Arbre des processus** (`-t`, touche `t`) : hiérarchie des `ppid`, les frères
-  suivent le tri actif. Un parent absent de la vue donne une forêt, pas une
-  branche coupée.
-- **%CPU** réel, par cœur (défaut) ou en pourcentage de la machine (`-M`).
-- **Sortie propre** dans un pipe : `psim > liste.txt`, `psim -k | grep ssh`.
-- **Configuration** validée clé par clé (`~/.config/psim/default.conf`), jamais
-  évaluée comme du shell.
-- **Souris** : clic = sélection, double-clic = détails.
-- Terminal toujours restauré (trap `EXIT` + signaux), journal borné avec
-  rotation.
+- **Process tree** (`-t`, `t` key): the `ppid` hierarchy, siblings following the
+  active sort. A parent missing from the view yields a forest, not a cut branch.
+- **Real %CPU**, per core (default) or as a share of the machine (`-M`).
+- **Clean output** in a pipe: `psim > list.txt`, `psim -k | grep ssh`.
+- **Configuration** validated key by key (`~/.config/psim/default.conf`), never
+  evaluated as shell.
+- **Mouse**: click selects, double-click shows details.
+- Terminal always restored (`EXIT` trap + signals), bounded log with rotation.
+- **Bilingual interface**: French or English, following the locale (see
+  [Interface language](#interface-language)).
 
-## Dépendances
+## Dependencies
 
 - `bash`
 - `ps` (procps-ng)
-- `awk` : gawk, mawk ou busybox awk
-- `tput` (optionnel)
+- `awk`: gawk, mawk or busybox awk
+- `tput` (optional)
 
 ## Installation
 
@@ -41,155 +43,169 @@ cd psim
 make install
 ```
 
-Par défaut, `make install` installe dans `~/.local` :
+By default `make install` installs into `~/.local`:
 
-| Élément | Destination |
+| Item | Destination |
 | --- | --- |
-| binaire | `~/.local/bin/psim` |
-| complétion zsh | `~/.local/share/zsh/completions/_psim` |
-| page de manuel (EN) | `~/.local/share/man/man1/psim.1` |
-| page de manuel (FR) | `~/.local/share/man/fr/man1/psim.1` |
+| binary | `~/.local/bin/psim` |
+| zsh completion | `~/.local/share/zsh/completions/_psim` |
+| manual page (EN) | `~/.local/share/man/man1/psim.1` |
+| manual page (FR) | `~/.local/share/man/fr/man1/psim.1` |
 
-`~/.local/share/zsh/completions` doit figurer dans `$fpath` (c'est le cas de la
-configuration zsh d'Omarchy) ; un nouveau shell charge alors la complétion.
+`~/.local/share/zsh/completions` must be in `$fpath` (the Omarchy zsh
+configuration does this); a new shell then loads the completion.
 
-Les répertoires sont configurables :
+The directories are configurable:
 
 ```bash
-make install PREFIX=/usr/local              # installation système
-make install MANDIR=/usr/share/man          # manuels ailleurs
-make install DESTDIR=/tmp/pkg PREFIX=/usr   # empaquetage
-make uninstall                              # retrait
+make install PREFIX=/usr/local              # system-wide install
+make install MANDIR=/usr/share/man          # manuals elsewhere
+make install DESTDIR=/tmp/pkg PREFIX=/usr   # packaging
+make uninstall                              # removal
 make check                                  # shellcheck --enable=all
 ```
 
-Sans installation, le script est autonome : `./psim`.
+Without installing, the script is self-contained: `./psim`.
 
 ## Documentation
 
-`man psim` après installation, ou directement depuis le dépôt :
+`man psim` after installation, or straight from the repository:
 
 ```bash
 man ./man/psim.1
 man ./man/fr/psim.1
 ```
 
-## Utilisation
+## Usage
 
 ```
 psim [OPTIONS] [--N]
 ```
 
-| Option | Effet |
+| Option | Effect |
 | --- | --- |
-| `-p`, `--pid` | tri par PID |
-| `-P`, `--ppid` | tri par PPID |
-| `-m`, `--mem` | tri par mémoire résidente |
-| `-c`, `--cpu` | tri par %CPU |
-| `-N`, `--nice` | tri par valeur nice |
-| `-u`, `--user` | tri par propriétaire |
-| `-C`, `--cmd` | tri par commande |
-| `-t`, `--tree` | hiérarchie des processus (arbre des ppid) |
-| `--no-tree` | annuler `--tree` (y compris `TREE=1` de la configuration) |
-| `-n`, `--newbie` | affichage simplifié (PID USER MiB %CPU CMD) |
-| `--normal` | colonnes complètes (annule `--newbie`) |
-| `-k`, `--kernel` | inclure les threads noyau |
-| `-K`, `--kernel-only` | uniquement les threads noyau |
-| `-g`, `--filter MOTIF` | filtre ERE (utilisateur + commande + arguments) |
-| `-w`, `--watch N` | rafraîchir toutes les N s (`0` = statique) |
-| `-H`, `--no-header` | masquer l'entête |
-| `-F`, `--no-footer` | masquer le pied de page |
-| `-O`, `--fullcmd` | chemin complet et arguments |
-| `-0`, `--no-color` | sans couleurs |
-| `-M`, `--machine-cpu` | %CPU en pourcentage de la machine |
-| `--per-core` | %CPU par cœur (défaut) |
-| `--no-config` | ignorer le fichier de configuration |
-| `--debug` | ne pas masquer les erreurs `ps`/`awk` |
-| `--N` | N premiers processus, une seule fois (`0` : tout) |
+| `-p`, `--pid` | sort by PID |
+| `-P`, `--ppid` | sort by PPID |
+| `-m`, `--mem` | sort by resident memory |
+| `-c`, `--cpu` | sort by %CPU |
+| `-N`, `--nice` | sort by nice value |
+| `-u`, `--user` | sort by owner |
+| `-C`, `--cmd` | sort by command |
+| `-t`, `--tree` | process hierarchy (ppid tree) |
+| `--no-tree` | cancel `--tree` (including `TREE=1` from the configuration) |
+| `-n`, `--newbie` | compact view (PID USER MiB %CPU CMD) |
+| `--normal` | full columns (cancels `--newbie`) |
+| `-k`, `--kernel` | include kernel threads |
+| `-K`, `--kernel-only` | kernel threads only |
+| `-g`, `--filter PATTERN` | ERE filter (user + command + arguments) |
+| `-w`, `--watch N` | refresh every N s (`0` = static) |
+| `-H`, `--no-header` | hide the header |
+| `-F`, `--no-footer` | hide the footer |
+| `-O`, `--fullcmd` | full path and arguments |
+| `-0`, `--no-color` | no colours |
+| `-M`, `--machine-cpu` | %CPU as a share of the machine |
+| `--per-core` | %CPU per core (default) |
+| `--no-config` | ignore the configuration file |
+| `--debug` | do not hide `ps`/`awk` errors |
+| `--N` | first N processes, once (`0`: all) |
 | `-v`, `--version` | version |
-| `-h`, `--help` | aide complète |
+| `-h`, `--help` | full help |
 
-Les options courtes se groupent (`-pn`, `-w5`, `-gfirefox`).
+Short options can be grouped (`-pn`, `-w5`, `-gfirefox`).
 
-### Exemples
+### Examples
 
 ```bash
-psim                        # moniteur temps réel
-psim -g 'firefox|telegram'  # filtrer
-psim --20                   # 20 premiers processus, une seule fois
-psim -K --0                 # threads noyau uniquement
-psim -t -c                  # arbre trié par CPU
-psim -k | grep kworker      # dans un pipe
+psim                        # real-time monitor
+psim -g 'firefox|telegram'  # filter
+psim --20                   # first 20 processes, once
+psim -K --0                 # kernel threads only
+psim -t -c                  # tree sorted by CPU
+psim -k | grep kworker      # inside a pipe
 ```
 
-## Raccourcis (mode dynamique)
+## Keys (dynamic mode)
 
-| Touche | Action |
+| Key | Action |
 | --- | --- |
-| `/` | filtre interactif (Entrée valide, Échap annule, Ctrl-U efface) |
-| `c` `m` `p` `P` `N` `u` `C` | tri CPU / mémoire / PID / PPID / nice / utilisateur / commande |
-| `t` | arbre des processus |
-| `k` | threads noyau : masqués / inclus / seuls |
-| `h` `f` | entête / pied de page |
-| `M` | %CPU machine ou par cœur |
-| `←` `→` | affichage simplifié / étendu |
-| `↑` `↓` | sélectionner (maintenir accélère) ; Échap relâche |
-| `PgUp` `PgDn` `Home` `End` | défilement de la vue |
-| `Entrée` / `d` | détails du processus sélectionné (la fiche défile : `↑` `↓` `PgUp` `PgDn` `Home` `End`) |
-| `x` / `X` | TERM / KILL, après confirmation |
-| `+` `-` | intervalle de rafraîchissement |
-| `F` | gel / reprise |
+| `/` | interactive filter (Enter applies, Esc cancels, Ctrl-U clears) |
+| `c` `m` `p` `P` `N` `u` `C` | sort CPU / memory / PID / PPID / nice / user / command |
+| `t` | process tree |
+| `k` | kernel threads: hidden / included / only |
+| `h` `f` | header / footer |
+| `M` | %CPU of the machine or per core |
+| `←` `→` | compact / extended view |
+| `↑` `↓` | select (holding accelerates); Esc releases |
+| `PgUp` `PgDn` `Home` `End` | scroll the view |
+| `Enter` / `d` | details of the selected process (the panel scrolls: `↑` `↓` `PgUp` `PgDn` `Home` `End`) |
+| `x` / `X` | TERM / KILL, after confirmation |
+| `+` `-` | refresh interval |
+| `F` | freeze / thaw |
 | `o` | options |
-| `?` | aide en sur-impression |
-| `q` | quitter |
+| `?` | shortcut overlay |
+| `q` | quit |
 
-Clic : sélection de la ligne ; double-clic : détails.
-`Maj+clic` laisse la sélection de texte du terminal opérationnelle.
-`PID 1`, `psim` et ses propres parents sont refusés à la terminaison.
+Click: select the row; double-click: details.
+`Shift+click` keeps the terminal's own text selection working.
+`PID 1`, `psim` and its own parents are refused when ending a process.
 
 ## Configuration
 
-`~/.config/psim/default.conf`, une clé `CLÉ=VALEUR` par ligne. Le fichier n'est
-jamais interprété comme du shell ; une clé inconnue ou une valeur invalide est
-signalée puis ignorée.
+`~/.config/psim/default.conf`, one `KEY=VALUE` per line. The file is never
+evaluated as shell; an unknown key or an invalid value is reported then ignored.
 
 ```conf
-# affichage
-NEWBIE=1          # 1 = simplifié, 0 = colonnes complètes
+# display
+NEWBIE=1          # 1 = compact, 0 = full columns
 HEADER=1
 FOOTER=1
 NO_COLOR=0
 SHOW_OPTS=0
 TREE=0
-# comportement
-INTERVAL=1        # secondes ; 0 = statique
-KERNEL=0          # 0, 1 (inclure) ou 2 (seulement)
-CPU_MODE=0        # 1 = %CPU de la machine
+# behaviour
+INTERVAL=1        # seconds; 0 = static
+KERNEL=0          # 0, 1 (include) or 2 (only)
+CPU_MODE=0        # 1 = machine-wide %CPU
 SORT=-%cpu        # pid, -pid, ppid, user, cmd, rss, %cpu, %mem, nice…
 FILTER=
 LOG=1
 DEBUG=0
 ```
 
-`--no-config` ignore le fichier : la session repart des valeurs par défaut.
-Les options de la ligne de commande l'emportent sur la configuration.
+`--no-config` skips the file: the session starts from the defaults.
+Command-line options win over the configuration.
 
-## Fichiers
+## Files
 
-| Chemin | Rôle |
+| Path | Role |
 | --- | --- |
 | `~/.config/psim/default.conf` | configuration |
-| `~/.cache/psim/log` | journal (`LOG=1`, rotation à 256 Kio) |
+| `~/.cache/psim/log` | log (`LOG=1`, rotated at 256 KiB) |
 
-## Développement
+## Interface language
+
+The interface follows the locale: the first of `LC_ALL`, `LC_MESSAGES`,
+`LANGUAGE`, `LANG` that is set decides. A value starting with `fr` gives
+French, anything else English — so `LC_ALL=fr_FR.UTF-8 psim` forces French and
+`LC_ALL=C psim` gives English.
+
+This covers the help, the error and warning messages, the status line, the
+shortcut overlay, the process box, the kill confirmation, the zsh completion
+descriptions and the log file. Code comments stay in French, and the technical
+labels (`PID`, `USER`, `MiB`, `%CPU`, `TOTAL (displayed)`, `proc`) are the same
+in both languages.
+
+## Development
 
 ```bash
-make check        # shellcheck --enable=all (le vrai ShellCheck)
+make check        # shellcheck --enable=all (the real ShellCheck)
 ```
 
-Après tout ajout, retrait ou changement d'option, mettre à jour ensemble :
-`psim`, `completions/_psim`, `man/psim.1` et `man/fr/psim.1`.
+After adding, removing or changing an option, update together:
+`psim`, `completions/_psim`, `man/psim.1` and `man/fr/psim.1`.
+The two interface catalogs (`CATALOG_FR`, `CATALOG_EN`) and the two help pages
+must always be modified in pairs.
 
 ## Licence
 
-GPLv3 — voir [LICENSE](LICENSE).
+GPLv3 — see [LICENSE](LICENSE).

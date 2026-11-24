@@ -17,6 +17,11 @@
 # sont donc déclarées en littéral — --10, --20, --50 — pour qu'elles sortent au
 # Tab ; une valeur plus exotique se tape à la main.
 #
+# Les descriptions suivent la langue de l'interface de psim : la table
+# française est choisie quand LC_ALL, LC_MESSAGES ou LANG commence par « fr »,
+# la table anglaise sinon. Les deux tables disent la même chose, dans le même
+# ordre : toute option ajoutée ou retirée doit l'être dans les deux.
+#
 # Installation : le fichier doit être dans $fpath
 #   install -Dm644 completions/_psim ~/.local/share/zsh/completions/_psim
 # (répertoire ajouté au fpath par la configuration zsh) ; un nouveau shell
@@ -26,38 +31,76 @@
 # cette table d'un côté, le `case` de PARSE_ARGS de l'autre.
 
 _psim() {
-	local curcontext="${curcontext:-}" state line
+	local curcontext="${curcontext:-}" state line loc
 	typeset -A opt_args
+	local -a opts
 
-	_arguments -s -S \
-		'(-p --pid)'{-p,--pid}'[tri par PID]' \
-		'(-P --ppid)'{-P,--ppid}'[tri par PPID]' \
-		'(-c --cpu)'{-c,--cpu}'[tri par %CPU]' \
-		'(-N --nice)'{-N,--nice}'[tri par valeur nice]' \
-		'(-m --mem)'{-m,--mem}'[tri par mémoire résidente]' \
-		'(-u --user)'{-u,--user}'[tri par propriétaire]' \
-		'(-C --cmd)'{-C,--cmd}'[tri par commande]' \
-		'(-t --tree --no-tree)'{-t,--tree}'[hiérarchie des processus (arbre des ppid)]' \
-		'(-t --tree --no-tree)--no-tree[annuler --tree]' \
-		'(-n --newbie --normal)'{-n,--newbie}'[affichage simplifié]' \
-		'(-n --newbie --normal)--normal[colonnes complètes (annule --newbie)]' \
-		'(-k --kernel)'{-k,--kernel}'[inclure les threads noyau]' \
-		'(-K --kernel-only)'{-K,--kernel-only}'[uniquement les threads noyau]' \
-		'(-g --filter)'{-g,--filter}'[filtre ERE (utilisateur, commande, arguments)]:motif:' \
-		'(-w --watch)'{-w,--watch}'[rafraîchir toutes les N secondes (0 = statique)]:secondes:(0 1 2 3 5 10 30 60)' \
-		'(-H --no-header)'{-H,--no-header}'[masquer l’entête]' \
-		'(-F --no-footer)'{-F,--no-footer}'[masquer le pied de page]' \
-		'(-O --fullcmd)'{-O,--fullcmd}'[chemin complet et arguments]' \
-		'(-0 --no-color)'{-0,--no-color}'[sans couleurs]' \
-		'(-M --machine-cpu --per-core)'{-M,--machine-cpu}'[%CPU en % de la machine]' \
-		'(--machine-cpu --per-core)--per-core[%CPU des lignes par cœur (défaut)]' \
-		'--no-config[ignorer le fichier de configuration]' \
-		'--debug[ne pas masquer les erreurs ps/awk]' \
-		'--10[10 premiers processus, une seule fois]' \
-		'--20[20 premiers processus, une seule fois]' \
-		'--50[50 premiers processus, une seule fois]' \
-		'(-v --version)'{-v,--version}'[afficher la version]' \
-		'(-h --help)'{-h,--help}'[afficher l’aide]'
+	loc="${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}"
+	if [[ "${loc:l}" == fr* ]]; then
+		opts=(
+			'(-p --pid)'{-p,--pid}'[tri par PID]'
+			'(-P --ppid)'{-P,--ppid}'[tri par PPID]'
+			'(-c --cpu)'{-c,--cpu}'[tri par %CPU]'
+			'(-N --nice)'{-N,--nice}'[tri par valeur nice]'
+			'(-m --mem)'{-m,--mem}'[tri par mémoire résidente]'
+			'(-u --user)'{-u,--user}'[tri par propriétaire]'
+			'(-C --cmd)'{-C,--cmd}'[tri par commande]'
+			'(-t --tree --no-tree)'{-t,--tree}'[hiérarchie des processus (arbre des ppid)]'
+			'(-t --tree --no-tree)--no-tree[annuler --tree]'
+			'(-n --newbie --normal)'{-n,--newbie}'[affichage simplifié]'
+			'(-n --newbie --normal)--normal[colonnes complètes (annule --newbie)]'
+			'(-k --kernel)'{-k,--kernel}'[inclure les threads noyau]'
+			'(-K --kernel-only)'{-K,--kernel-only}'[uniquement les threads noyau]'
+			'(-g --filter)'{-g,--filter}'[filtre ERE (utilisateur, commande, arguments)]:motif:'
+			'(-w --watch)'{-w,--watch}'[rafraîchir toutes les N secondes (0 = statique)]:secondes:(0 1 2 3 5 10 30 60)'
+			'(-H --no-header)'{-H,--no-header}'[masquer l’entête]'
+			'(-F --no-footer)'{-F,--no-footer}'[masquer le pied de page]'
+			'(-O --fullcmd)'{-O,--fullcmd}'[chemin complet et arguments]'
+			'(-0 --no-color)'{-0,--no-color}'[sans couleurs]'
+			'(-M --machine-cpu --per-core)'{-M,--machine-cpu}'[%CPU en % de la machine]'
+			'(--machine-cpu --per-core)--per-core[%CPU des lignes par cœur (défaut)]'
+			'--no-config[ignorer le fichier de configuration]'
+			'--debug[ne pas masquer les erreurs ps/awk]'
+			'--10[10 premiers processus, une seule fois]'
+			'--20[20 premiers processus, une seule fois]'
+			'--50[50 premiers processus, une seule fois]'
+			'(-v --version)'{-v,--version}'[afficher la version]'
+			'(-h --help)'{-h,--help}'[afficher l’aide]'
+		)
+	else
+		opts=(
+			'(-p --pid)'{-p,--pid}'[sort by PID]'
+			'(-P --ppid)'{-P,--ppid}'[sort by PPID]'
+			'(-c --cpu)'{-c,--cpu}'[sort by %CPU]'
+			'(-N --nice)'{-N,--nice}'[sort by nice value]'
+			'(-m --mem)'{-m,--mem}'[sort by resident memory]'
+			'(-u --user)'{-u,--user}'[sort by owner]'
+			'(-C --cmd)'{-C,--cmd}'[sort by command]'
+			'(-t --tree --no-tree)'{-t,--tree}'[process hierarchy (ppid tree)]'
+			'(-t --tree --no-tree)--no-tree[cancel --tree]'
+			'(-n --newbie --normal)'{-n,--newbie}'[compact view]'
+			'(-n --newbie --normal)--normal[full columns (cancels --newbie)]'
+			'(-k --kernel)'{-k,--kernel}'[include kernel threads]'
+			'(-K --kernel-only)'{-K,--kernel-only}'[kernel threads only]'
+			'(-g --filter)'{-g,--filter}'[ERE filter (user, command, arguments)]:pattern:'
+			'(-w --watch)'{-w,--watch}'[refresh every N seconds (0 = static)]:seconds:(0 1 2 3 5 10 30 60)'
+			'(-H --no-header)'{-H,--no-header}'[hide the header]'
+			'(-F --no-footer)'{-F,--no-footer}'[hide the footer]'
+			'(-O --fullcmd)'{-O,--fullcmd}'[full path and arguments]'
+			'(-0 --no-color)'{-0,--no-color}'[no colours]'
+			'(-M --machine-cpu --per-core)'{-M,--machine-cpu}'[%CPU as a share of the machine]'
+			'(--machine-cpu --per-core)--per-core[%CPU of rows per core (default)]'
+			'--no-config[ignore the configuration file]'
+			'--debug[do not hide ps/awk errors]'
+			'--10[first 10 processes, once]'
+			'--20[first 20 processes, once]'
+			'--50[first 50 processes, once]'
+			'(-v --version)'{-v,--version}'[print the version]'
+			'(-h --help)'{-h,--help}'[print the help]'
+		)
+	fi
+
+	_arguments -s -S "${opts[@]}"
 }
 
 _psim "$@"
