@@ -120,10 +120,11 @@ En mode interactif, le même filtre se modifie en direct avec
 .BI \-w " N" "\fR, \fP\-\-watch " N
 Rafraîchir toutes les
 .I N
-secondes.
+secondes ; les décimales sont acceptées
+.RB ( 0.5 ", " 0.25 ).
 Zéro produit une seule trame statique.
 .I N
-va de 0 à 3599 ; à partir de 3599, l'affichage est immédiatement gelé.
+va de 0 à 3599.
 .TP
 .B \-H, \-\-no-header
 Masquer la ligne d'entête.
@@ -271,13 +272,17 @@ Basculer le pied de page.
 Basculer la colonne de ligne de commande.
 .TP
 .B +
-Augmenter l'intervalle de rafraîchissement d'une seconde, jusqu'à 120.
+Ralentir : 0,25 puis 0,5 puis 1 s, ensuite une seconde à la fois jusqu'à 120.
 .TP
 .B \-
-Diminuer l'intervalle de rafraîchissement d'une seconde, jusqu'à 1.
+Accélérer : une seconde à la fois jusqu'à 1 s, puis 0,5 s, puis 0,25 s.
 .TP
 .B F
-Geler ou reprendre le rafraîchissement.
+Geler ou reprendre l'échantillonnage.
+Gelée, l'image reste celle du moment de l'appui : tri, filtre, arbre et
+détails continuent de travailler dessus sans relancer
+.BR ps (1),
+et la touche reprend à l'intervalle d'avant.
 .TP
 .B "Flèche gauche"
 Passer à l'affichage simplifié.

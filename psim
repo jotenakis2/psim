@@ -37,7 +37,7 @@ readonly SELF_PID="${BASHPID:-$$}"
 readonly THIN_W=100        # en dessous : mode simplifié forcé
 readonly MIN_W=60          # en dessous : refus du mode dynamique
 readonly MIN_H=6
-readonly INTERVAL_MAX=3599 # au-delà : gel
+readonly INTERVAL_MAX=3599 # intervalle maximal, en secondes
 readonly LOG_MAX=262144    # rotation du journal (octets)
 
 # Glyphe Nerd Font du statut (horloge de l'intervalle)
@@ -69,7 +69,9 @@ declare -i STATUSW=0
 status_p=''
 status_c=''
 declare -i FILTER_EDIT=0 FILTER_INVALID=0
-declare -i NEWBIE=1 INTERVAL=1 HEADER=1 FOOTER=1 NO_COLOR=0
+# INTERVAL est en CENTIÈMES de seconde (25 = 0,25 s) ; il ne dit que la cadence,
+# le gel est un état séparé (FREEZE) : geler n'écrase plus la cadence.
+declare -i NEWBIE=1 INTERVAL=100 HEADER=1 FOOTER=1 NO_COLOR=0
 declare -i KERNEL=0 STATIC=1 SHOW_OPTS=0 FREEZE=0 LOG=1 DEBUG=0 CPU_MODE=0
 # NO_CONFIG=1 : le fichier de configuration n'est pas lu du tout (--no-config).
 # Le drapeau est posé avant LOAD_CONFIG, voir MAIN.
@@ -92,6 +94,9 @@ declare DET_BG='' DET_RS='' DET_HINT=''
 # un code de retour de fonction testé dans une condition)
 declare CMDNAME='?'
 declare -i ISANC=0 ASKED=0 KILL_OK=0
+declare INTERVAL_TXT='1'          # INTERVAL en forme « 0.25 » pour read -t / sleep
+declare SAMPLE=''                 # dernier échantillon ps, réutilisé pendant le gel
+declare -i KEY_GOT=0              # HANDLE_KEY a-t-elle traité une touche ?
 declare SORT="-%cpu"
 declare FILTER="" FILTER_BUF="" FILTER_SAVE=""
 declare -i NCPU=1
@@ -208,14 +213,14 @@ CATALOG_FR() {
         [cfg_bool]='{1} doit valoir 0 ou 1 (ligne ignorée)'
         [cfg_unreadable]='{1} illisible : configuration ignorée'
         [cfg_badline]='ligne ignorée (format attendu CLÉ=VALEUR)'
-        [cfg_interval]='INTERVAL attend un entier 0..{1} (ignoré)'
+        [cfg_interval]='INTERVAL attend un nombre de secondes 0..{1} (ignoré)'
         [cfg_kernel]='KERNEL doit valoir 0, 1 ou 2 (ignoré)'
         [cfg_sort]='tri « {1} » inconnu (ignoré)'
         [cfg_key]='clé inconnue « {1} » (ignorée)'
         [cfg_badlines]='{1} ligne(s) de {2} ignorée(s)'
 
         [arg_needs]="l'option {1} attend un argument."
-        [arg_watch]='{1} attend un entier entre 0 et {2}.'
+        [arg_watch]='{1} attend un nombre de secondes entre 0 et {2}.'
         [arg_nmax]='--N trop grand (maximum 10000).'
         [arg_unknown]='option inconnue : {1}'
         [arg_unexpected]='argument inattendu : {1}'
@@ -305,14 +310,14 @@ CATALOG_EN() {
         [cfg_bool]='{1} must be 0 or 1 (line ignored)'
         [cfg_unreadable]='{1} unreadable: configuration ignored'
         [cfg_badline]='line ignored (expected KEY=VALUE)'
-        [cfg_interval]='INTERVAL expects an integer 0..{1} (ignored)'
+        [cfg_interval]='INTERVAL expects a number of seconds 0..{1} (ignored)'
         [cfg_kernel]='KERNEL must be 0, 1 or 2 (ignored)'
         [cfg_sort]='unknown sort « {1} » (ignored)'
         [cfg_key]='unknown key « {1} » (ignored)'
         [cfg_badlines]='{1} line(s) of {2} ignored'
 
         [arg_needs]='option {1} requires an argument.'
-        [arg_watch]='{1} expects an integer between 0 and {2}.'
+        [arg_watch]='{1} expects a number of seconds between 0 and {2}.'
         [arg_nmax]='--N too large (maximum 10000).'
         [arg_unknown]='unknown option: {1}'
         [arg_unexpected]='unexpected argument: {1}'
@@ -434,11 +439,50 @@ DEFINE_COLORS() {
 }
 
 ##############################################################################
+# Intervalle : centièmes de seconde
+#
+# INTERVAL compte des centièmes (25 = 0,25 s) : c'est un entier, donc les
+# comparaisons, le gel et les touches restent de l'arithmétique bash pure, sans
+# flottants. Seuls read -t et sleep veulent une chaîne décimale (FMT_INTERVAL),
+# et le parsing des « 0.25 » se fait par découpage, sans arithmétique flottante.
+##############################################################################
+
+# Centièmes -> INTERVAL_TXT, forme acceptée par read -t / sleep (1, 0.5, 0.25).
+FMT_INTERVAL() {
+    local -i cs="${1:-0}"
+    if (( cs % 100 == 0 )); then
+        printf -v INTERVAL_TXT '%d' $(( cs / 100 ))
+    elif (( cs % 10 == 0 )); then
+        printf -v INTERVAL_TXT '%d.%d' $(( cs / 100 )) $(( (cs % 100) / 10 ))
+    else
+        printf -v INTERVAL_TXT '%d.%02d' $(( cs / 100 )) $(( cs % 100 ))
+    fi
+    return 0
+}
+
+# « 0 », « 1 », « 0.5 », « 0.25 » (0 à INTERVAL_MAX secondes) -> IVAL en
+# centièmes, IVAL_OK=1 si valide. Zéro reste zéro (mode statique). Au-delà de
+# deux décimales, la valeur est refusée : 0,25 s est le cran le plus fin.
+PARSE_INTERVAL() {
+    local v="$1" whole='' frac=''
+    IVAL=0
+    IVAL_OK=0
+    [[ "${v}" =~ ^([0-9]{1,4})(\.([0-9]{1,2}))?$ ]] || return 0
+    whole="${BASH_REMATCH[1]}"
+    frac="${BASH_REMATCH[3]:-}"
+    (( 10#${whole} <= INTERVAL_MAX )) || return 0
+    while (( ${#frac} < 2 )); do frac+='0'; done
+    IVAL=$(( 10#${whole} * 100 + 10#${frac} ))
+    IVAL_OK=1
+    return 0
+}
+
+##############################################################################
 # Configuration (parsing strict, aucune évaluation de shell)
 ##############################################################################
 CONFIG_DEFAULTS() {
     NEWBIE=1
-    INTERVAL=1
+    INTERVAL=100
     HEADER=1
     FOOTER=1
     NO_COLOR=0
@@ -501,10 +545,10 @@ LOAD_CONFIG() {
                 SET_BOOL "${key}" "${val}" "${n}" || bad=$((bad + 1))
                 ;;
             INTERVAL)
-                if [[ "${val}" =~ ^[0-9]+$ ]] && (( 10#${val} <= INTERVAL_MAX )); then
-                    INTERVAL=$((10#${val}))
+                PARSE_INTERVAL "${val}"
+                if (( IVAL_OK == 1 )); then
+                    INTERVAL=${IVAL}
                     (( INTERVAL == 0 )) && STATIC=1
-                    (( INTERVAL >= INTERVAL_MAX )) && FREEZE=1
                 else
                     t cfg_interval "${INTERVAL_MAX}"
                     CFG_WARN "${n}"
@@ -579,7 +623,7 @@ ${Vert}OPTIONS${Reset}
    ${Bleu}-k, --kernel${Reset}           inclure les threads noyau
    ${Bleu}-K, --kernel-only${Reset}      uniquement les threads noyau
    ${Bleu}-g, --filter MOTIF${Reset}     filtre ERE (utilisateur + commande + arguments)
-   ${Bleu}-w, --watch N${Reset}          rafraîchir toutes les N s (0 = statique)
+   ${Bleu}-w, --watch N${Reset}          rafraîchir toutes les N s, décimales acceptées (0 = statique)
    ${Bleu}-H, --no-header${Reset}        masquer l'entête
    ${Bleu}-F, --no-footer${Reset}        masquer le pied de page
    ${Bleu}-O, --fullcmd${Reset}          chemin complet et arguments
@@ -616,7 +660,7 @@ ${Vert}OPTIONS${Reset}
    ${Bleu}-k, --kernel${Reset}           include kernel threads
    ${Bleu}-K, --kernel-only${Reset}      kernel threads only
    ${Bleu}-g, --filter PATTERN${Reset}   ERE filter (user + command + arguments)
-   ${Bleu}-w, --watch N${Reset}          refresh every N s (0 = static)
+   ${Bleu}-w, --watch N${Reset}          refresh every N s, decimals accepted (0 = static)
    ${Bleu}-H, --no-header${Reset}        hide the header
    ${Bleu}-F, --no-footer${Reset}        hide the footer
    ${Bleu}-O, --fullcmd${Reset}          full path and arguments
@@ -665,7 +709,7 @@ ${Vert}RACCOURCIS (dynamique)${Reset}
    c/m/p/P/N/u/C tri            o  options        M  %CPU machine
    t  arbre     k  noyau
    h  entête     f  pied        ?  aide         q  quitter
-   +/-  délai    F  gel/dégel   ←/→  newbie/étendu
+   +/-  délai    F  gel/dégel (arrête ps)   ←/→  newbie/étendu
    ↑/↓  sélectionner (la vue suit aux bords ; maintenir la flèche accélère)
          Échap  relâcher
    clic  sélectionner la ligne   double-clic : détails du processus
@@ -680,6 +724,13 @@ ${Vert}RACCOURCIS (dynamique)${Reset}
    ?  aide en sur-impression : la liste complète des raccourcis. Le statut
       (filtre, gel, défilement) s'affiche à droite de l'entête dès qu'il y a
       quelque chose à dire, ou sur une ligne en bas si l'entête est masquée.
+
+${Vert}DÉLAI${Reset}
+   ${Jaune}+${Reset} ralentit, ${Jaune}-${Reset} accélère : 1 s, 0,5 s, 0,25 s (et au-delà d'une seconde, par
+   seconde jusqu'à 120). ${Jaune}--watch N${Reset} fixe la cadence, décimales acceptées, ${Jaune}0${Reset} =
+   statique. Le gel (${Jaune}F${Reset}) arrête ${Jaune}ps${Reset} : l'image reste celle du moment du gel, et
+   trier, filtrer, passer en arbre ou ouvrir les détails travaillent dessus
+   sans rééchantillonner ; ${Jaune}F${Reset} reprend à la cadence d'avant.
 
 ${Vert}FILTRE INTERACTIF${Reset}
    ${Jaune}/${Reset} ouvre la saisie : le motif se construit caractère par caractère et la liste
@@ -745,7 +796,7 @@ ${Vert}SHORTCUTS (dynamic)${Reset}
    c/m/p/P/N/u/C sort           o  options      M  machine %CPU
    t  tree      k  kernel
    h  header    f  footer       ?  help         q  quit
-   +/-  interval  F  freeze/thaw  ←/→  compact/extended
+   +/-  interval  F  freeze/thaw (stops ps)  ←/→  compact/extended
    ↑/↓  select (the view follows at the edges; holding the key accelerates)
          Esc  release
    click  select the row   double-click: process details
@@ -761,6 +812,13 @@ ${Vert}SHORTCUTS (dynamic)${Reset}
       (filter, freeze, scrolling) appears to the right of the header whenever
       there is something to report, or on a line at the bottom if the header
       is hidden.
+
+${Vert}INTERVAL${Reset}
+   ${Jaune}+${Reset} slows down, ${Jaune}-${Reset} speeds up: 1 s, 0.5 s, 0.25 s (and above one second, one
+   second at a time up to 120). ${Jaune}--watch N${Reset} sets the cadence, decimals accepted, ${Jaune}0${Reset} =
+   static. Freeze (${Jaune}F${Reset}) stops ${Jaune}ps${Reset}: the screen keeps the moment you froze it, and
+   sorting, filtering, the tree or the details work on that snapshot without
+   sampling again; ${Jaune}F${Reset} resumes at the previous cadence.
 
 ${Vert}INTERACTIVE FILTER${Reset}
    ${Jaune}/${Reset} opens the prompt: the pattern is built character by character and the list
@@ -916,17 +974,15 @@ PARSE_ARGS() {
             -v|--version) VERSION; QUIT 0 ;;
             -w|--watch)
                 NEED_ARG "${arg}" "${2:-}"
-                # ${#2} : un entier de 19 chiffres déborde en négatif et
-                # passerait le test, pour finir en « sleep: invalid option »
-                if [[ ! "${2}" =~ ^[0-9]+$ ]] || (( ${#2} > 4 )) || (( 10#${2} > INTERVAL_MAX )); then
+                PARSE_INTERVAL "${2}"
+                if (( IVAL_OK == 0 )); then
                     t arg_watch "${arg}" "${INTERVAL_MAX}"
                     ERR "${TXT}"
                     QUIT 2
                 fi
-                INTERVAL=$((10#${2}))
+                INTERVAL=${IVAL}
                 (( INTERVAL == 0 )) && STATIC=1
                 (( INTERVAL && LIMIT == 0 )) && STATIC=0          # -w N écrase un INTERVAL=0 de la config
-                (( INTERVAL >= INTERVAL_MAX )) && FREEZE=1
                 shift 2
                 ;;
             -g|--filter)
@@ -1572,7 +1628,22 @@ RENDER() {
     fi
 
     local -i arc=0
-    if (( DEBUG == 1 )); then
+    # Gel : la trame est rendue depuis SAMPLE, donc sans relancer ps. Au premier
+    # dessin qui suit la touche F, l'échantillon est pris ici même : l'image
+    # gelée est celle du moment où on a demandé le gel. Un ps en échec laisse
+    # SAMPLE vide et la trame suivante réessaie.
+    if (( FREEZE == 1 )) && [[ -z "${SAMPLE}" ]]; then
+        if (( DEBUG == 1 )); then
+            SAMPLE=$("${pscmd[@]}" || true)
+        else
+            SAMPLE=$("${pscmd[@]}" 2>/dev/null || true)
+        fi
+    fi
+    if (( FREEZE == 1 )) && [[ -n "${SAMPLE}" ]]; then
+        if ! printf '%s\n' "${SAMPLE}" | "${awkcmd[@]}" "${AWK_MAIN}" 2>/dev/null; then
+            arc=${PIPESTATUS[1]}
+        fi
+    elif (( DEBUG == 1 )); then
         if ! "${pscmd[@]}" | "${awkcmd[@]}" "${AWK_MAIN}"; then arc=${PIPESTATUS[1]}; fi
     else
         if ! "${pscmd[@]}" 2>/dev/null | "${awkcmd[@]}" "${AWK_MAIN}" 2>/dev/null; then arc=${PIPESTATUS[1]}; fi
@@ -1607,9 +1678,10 @@ STATUS_BUILD() {
         if (( FREEZE == 1 )); then
             status_p+=" ${ICON_CLOCK} ${frz}"
             status_c+=" ${RougeBold}${ICON_CLOCK} ${frz}${ResetFg}"
-        elif (( INTERVAL != 1 )); then
-            status_p+=" ${ICON_CLOCK} ${INTERVAL}s"
-            status_c+=" ${Gris}${ICON_CLOCK} ${INTERVAL}s${ResetFg}"
+        elif (( INTERVAL != 100 )); then
+            FMT_INTERVAL "${INTERVAL}"
+            status_p+=" ${ICON_CLOCK} ${INTERVAL_TXT}s"
+            status_c+=" ${Gris}${ICON_CLOCK} ${INTERVAL_TXT}s${ResetFg}"
         fi
         if (( TREE == 1 )); then
             status_p+=" ${tre}"
@@ -1922,17 +1994,20 @@ HANDLE_KEY() {
     local key seq
     local -i max_off rc
 
+    FMT_INTERVAL "${INTERVAL}"
+    KEY_GOT=0
     while :; do
         key=''
         seq=''
         rc=0
-        read -rt "${INTERVAL}" -n 1 key 2>/dev/null || rc=$?
+        read -rt "${INTERVAL_TXT}" -n 1 key 2>/dev/null || rc=$?
         if (( rc != 0 )); then
             # 1 = EOF (entrée fermée) : on ne tourne pas à vide
-            (( rc > 128 )) || sleep "${INTERVAL}"
+            (( rc > 128 )) || sleep "${INTERVAL_TXT}"
             return 0
         fi
 
+        KEY_GOT=1
         if (( FILTER_EDIT == 1 )); then
             FILTER_EDIT_KEY "${key}"
             return 0
@@ -1971,22 +2046,33 @@ HANDLE_KEY() {
             f) FOOTER=$((1 - FOOTER)) ;;
             '?') HELP_OVERLAY ;;
             q|Q) QUIT 0 ;;
-            +)
-                if (( INTERVAL >= 120 )); then INTERVAL=120; else INTERVAL=$((INTERVAL + 1)); fi
+            +)                              # plus lent : 0,25 -> 0,5 -> 1 -> 2 ...
                 FREEZE=0
-                ;;
-            -)
-                if (( INTERVAL > 120 )); then INTERVAL=120; else INTERVAL=$(( INTERVAL > 1 ? INTERVAL - 1 : 1 )); fi
-                FREEZE=0
-                ;;
-            F)
-                if (( FREEZE == 1 )); then
-                    FREEZE=0
-                    INTERVAL=1
+                if (( INTERVAL < 25 )); then
+                    INTERVAL=25
+                elif (( INTERVAL < 50 )); then
+                    INTERVAL=50
+                elif (( INTERVAL < 100 )); then
+                    INTERVAL=100
+                elif (( INTERVAL >= 12000 )); then
+                    INTERVAL=12000
                 else
-                    FREEZE=1
-                    INTERVAL="${INTERVAL_MAX}"
+                    INTERVAL=$(( INTERVAL + 100 ))
                 fi
+                ;;
+            -)                              # plus rapide : ... 2 -> 1 -> 0,5 -> 0,25
+                FREEZE=0
+                if (( INTERVAL > 100 )); then
+                    INTERVAL=$(( INTERVAL - 100 ))
+                elif (( INTERVAL > 50 )); then
+                    INTERVAL=50
+                elif (( INTERVAL > 25 )); then
+                    INTERVAL=25
+                fi
+                ;;
+            F)                              # gel : on cesse d'échantillonner
+                FREEZE=$(( 1 - FREEZE ))
+                SAMPLE=''                   # l'image gelée est prise à la trame suivante
                 ;;
             c) SORT_TOGGLE "-%cpu" "%cpu"; OFFSET=0 ;;
             C) SORT_TOGGLE "cmd" "-cmd"; SHOW_OPTS=1; OFFSET=0 ;;
@@ -2812,15 +2898,21 @@ RUN_DYNAMIC() {
     trap 'exit 130' INT
     trap 'exit 143' TERM HUP
     trap 'exit 131' QUIT PIPE
-    # un redimensionnement doit être vu tout de suite : sinon, gelé (intervalle
-    # de 3599 s), la mise en page reste fausse pendant près d'une heure.
+    # un redimensionnement doit être vu tout de suite : gelé, aucune trame ne se
+    # redessine d'elle-même, la mise en page resterait fausse jusqu'à la touche
+    # suivante.
     WINCH=0
     trap 'WINCH=1' WINCH
 
+    # Gel : sans touche ni redimensionnement, rien ne peut changer à l'écran —
+    # on ne redessine pas. KEY_GOT porte la réponse de HANDLE_KEY (touche lue ou
+    # expiration du délai), posée à 1 pour la première trame.
+    KEY_GOT=1
     while :; do
         if (( WINCH == 1 )); then
             WINCH=0
             READ_SIZE 1
+            KEY_GOT=1
         fi
         if (( WIDTH < MIN_W || HEIGHT < MIN_H )); then
             RESTORE_SCREEN
@@ -2830,7 +2922,9 @@ RUN_DYNAMIC() {
         fi
         (( WIDTH < THIN_W )) && NEWBIE=1
 
-        DRAW_FRAME
+        if (( KEY_GOT == 1 || FREEZE == 0 )); then
+            DRAW_FRAME
+        fi
         HANDLE_KEY
     done
 }

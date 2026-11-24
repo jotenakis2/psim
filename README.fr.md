@@ -101,7 +101,7 @@ psim [OPTIONS] [--N]
 | `-k`, `--kernel` | inclure les threads noyau |
 | `-K`, `--kernel-only` | uniquement les threads noyau |
 | `-g`, `--filter MOTIF` | filtre ERE (utilisateur + commande + arguments) |
-| `-w`, `--watch N` | rafraîchir toutes les N s (`0` = statique) |
+| `-w`, `--watch N` | rafraîchir toutes les N s, décimales acceptées (`0` = statique) |
 | `-H`, `--no-header` | masquer l'entête |
 | `-F`, `--no-footer` | masquer le pied de page |
 | `-O`, `--fullcmd` | chemin complet et arguments |
@@ -143,8 +143,8 @@ psim -k | grep kworker      # dans un pipe
 | `PgUp` `PgDn` `Home` `End` | défilement de la vue |
 | `Entrée` / `d` | détails du processus sélectionné (la fiche défile : `↑` `↓` `PgUp` `PgDn` `Home` `End`) |
 | `x` / `X` | TERM / KILL, après confirmation |
-| `+` `-` | intervalle de rafraîchissement |
-| `F` | gel / reprise |
+| `+` `-` | intervalle de rafraîchissement : 1 s, 0,5 s, 0,25 s |
+| `F` | gel (arrête l'échantillonnage) / reprise |
 | `o` | options |
 | `?` | aide en sur-impression |
 | `q` | quitter |
@@ -168,7 +168,7 @@ NO_COLOR=0
 SHOW_OPTS=0
 TREE=0
 # comportement
-INTERVAL=1        # secondes ; 0 = statique
+INTERVAL=1        # secondes, décimales acceptées ; 0 = statique
 KERNEL=0          # 0, 1 (inclure) ou 2 (seulement)
 CPU_MODE=0        # 1 = %CPU des lignes en % machine
 SORT=-%cpu        # pid, -pid, ppid, user, cmd, rss, %cpu, %mem, nice…

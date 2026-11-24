@@ -116,10 +116,11 @@ In the interactive mode the same filter can be edited live with
 .BI \-w " N" "\fR, \fP\-\-watch " N
 Refresh every
 .I N
-seconds.
+seconds; decimals are accepted
+.RB ( 0.5 ", " 0.25 ).
 Zero means a single static frame.
 .I N
-ranges from 0 to 3599; values at or above 3599 freeze the display immediately.
+ranges from 0 to 3599.
 .TP
 .B \-H, \-\-no-header
 Hide the header line.
@@ -263,13 +264,18 @@ Toggle the footer.
 Toggle the command line column.
 .TP
 .B +
-Increase the refresh interval by one second, up to 120.
+Slow down: 0.25 to 0.5 to 1 s, then one second at a time up to 120.
 .TP
 .B \-
-Decrease the refresh interval by one second, down to 1.
+Speed up: one second at a time down to 1 s, then 0.5 s, then 0.25 s.
 .TP
 .B F
-Freeze or resume refreshing.
+Freeze or resume sampling.
+While frozen the screen keeps the moment the key was pressed: sorting,
+filtering, the process tree and the details keep working on that snapshot
+without running
+.BR ps (1)
+again, and the key resumes at the previous interval.
 .TP
 .B "Left arrow"
 Switch to the simplified display.

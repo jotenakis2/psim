@@ -99,7 +99,7 @@ psim [OPTIONS] [--N]
 | `-k`, `--kernel` | include kernel threads |
 | `-K`, `--kernel-only` | kernel threads only |
 | `-g`, `--filter PATTERN` | ERE filter (user + command + arguments) |
-| `-w`, `--watch N` | refresh every N s (`0` = static) |
+| `-w`, `--watch N` | refresh every N s, decimals accepted (`0` = static) |
 | `-H`, `--no-header` | hide the header |
 | `-F`, `--no-footer` | hide the footer |
 | `-O`, `--fullcmd` | full path and arguments |
@@ -141,8 +141,8 @@ psim -k | grep kworker      # inside a pipe
 | `PgUp` `PgDn` `Home` `End` | scroll the view |
 | `Enter` / `d` | details of the selected process (the panel scrolls: `↑` `↓` `PgUp` `PgDn` `Home` `End`) |
 | `x` / `X` | TERM / KILL, after confirmation |
-| `+` `-` | refresh interval |
-| `F` | freeze / thaw |
+| `+` `-` | refresh interval: 1 s, 0.5 s, 0.25 s |
+| `F` | freeze (stops sampling) / resume |
 | `o` | options |
 | `?` | shortcut overlay |
 | `q` | quit |
@@ -165,7 +165,7 @@ NO_COLOR=0
 SHOW_OPTS=0
 TREE=0
 # behaviour
-INTERVAL=1        # seconds; 0 = static
+INTERVAL=1        # seconds, decimals accepted; 0 = static
 KERNEL=0          # 0, 1 (include) or 2 (only)
 CPU_MODE=0        # 1 = machine-wide %CPU for the rows
 SORT=-%cpu        # pid, -pid, ppid, user, cmd, rss, %cpu, %mem, nice…
