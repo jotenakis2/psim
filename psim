@@ -722,8 +722,8 @@ ${Vert}RACCOURCIS (dynamique)${Reset}
    x  TERM  et  X  KILL  sur le processus sélectionné, après confirmation (y).
    PID 1, psim et ses propres parents sont refusés.
    ?  aide en sur-impression : la liste complète des raccourcis. Le statut
-      (filtre, gel, défilement) s'affiche à droite de l'entête dès qu'il y a
-      quelque chose à dire, ou sur une ligne en bas si l'entête est masquée.
+      (cadence, filtre, gel, défilement) s'affiche à droite de l'entête, ou sur
+      une ligne en bas si l'entête est masquée.
 
 ${Vert}DÉLAI${Reset}
    ${Jaune}+${Reset} ralentit, ${Jaune}-${Reset} accélère : 1 s, 0,5 s, 0,25 s (et au-delà d'une seconde, par
@@ -809,9 +809,8 @@ ${Vert}SHORTCUTS (dynamic)${Reset}
    x  TERM  and  X  KILL  on the selected process, after confirmation (y).
    PID 1, psim and its own parents are refused.
    ?  overlay help: the full list of shortcuts. The status
-      (filter, freeze, scrolling) appears to the right of the header whenever
-      there is something to report, or on a line at the bottom if the header
-      is hidden.
+      (interval, filter, freeze, scrolling) appears to the right of the header,
+      or on a line at the bottom if the header is hidden.
 
 ${Vert}INTERVAL${Reset}
    ${Jaune}+${Reset} slows down, ${Jaune}-${Reset} speeds up: 1 s, 0.5 s, 0.25 s (and above one second, one
@@ -1305,7 +1304,7 @@ function emit_header() {
                 hc(sprintf("%6s", hdr_cpu), GREEN, sort ~ /^-?%?cpu$/) "   " \
                 hc(hdr_cmd, YELLOW, sort ~ /^-?%?cmd$/)
         }
-        # statut à droite (filtre, gel, défilement) : il n'a de place que si
+        # statut à droite (cadence, filtre, gel, défilement) : il n'a de place que si
         # l'entête est plus étroit que le terminal
         stat = ""
         pad_h = width - hdr_plain_len
@@ -1656,7 +1655,7 @@ RENDER() {
 ##############################################################################
 # Statut
 ##############################################################################
-# Statut compact, à droite de l'entête : filtre, gel/intervalle, défilement.
+# Statut compact, à droite de l'entête : cadence, filtre, gel, défilement.
 # C'est tout ce que le bandeau apportait en plus des raccourcis — ceux-ci vivent
 # maintenant dans la boîte de la touche H, ce qui rend une ligne au tableau.
 # status_p = version nue (largeur), status_c = version colorée.
@@ -1675,13 +1674,15 @@ STATUS_BUILD() {
                 status_c+=" ${Jaune}/${FILTER}${caret}${ResetFg}"
             fi
         fi
+        # la cadence est toujours affichée (1 s comprise) : c'est le réglage
+        # qui explique le reste du statut. Le gel s'y ajoute au lieu de la
+        # remplacer, sinon on ne sait plus à quoi on reprendra.
+        FMT_INTERVAL "${INTERVAL}"
+        status_p+=" ${ICON_CLOCK} ${INTERVAL_TXT}s"
+        status_c+=" ${Gris}${ICON_CLOCK} ${INTERVAL_TXT}s${ResetFg}"
         if (( FREEZE == 1 )); then
-            status_p+=" ${ICON_CLOCK} ${frz}"
-            status_c+=" ${RougeBold}${ICON_CLOCK} ${frz}${ResetFg}"
-        elif (( INTERVAL != 100 )); then
-            FMT_INTERVAL "${INTERVAL}"
-            status_p+=" ${ICON_CLOCK} ${INTERVAL_TXT}s"
-            status_c+=" ${Gris}${ICON_CLOCK} ${INTERVAL_TXT}s${ResetFg}"
+            status_p+=" ${frz}"
+            status_c+=" ${RougeBold}${frz}${ResetFg}"
         fi
         if (( TREE == 1 )); then
             status_p+=" ${tre}"
