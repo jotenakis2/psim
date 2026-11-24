@@ -132,6 +132,29 @@ SET_LANG() {
     return 0
 }
 
+# Aligne le comptage des caractères sur le rendu du terminal. Hors locale
+# multibyte (LC_ALL=C, LANG vide, locale absente de la machine), bash compte les
+# OCTETS : « ↑ » vaut 3, « ─ » vaut 3, et tout l'alignement des cadres part à
+# vau-l'eau — la bordure haute s'arrêtait au tiers de la fenêtre, les lignes des
+# flèches rentraient de 4 colonnes. awk tombe aussi en mode octets et dessine
+# l'arbre en ASCII. On bascule donc LC_ALL sur C.UTF-8, qui ne touche qu'au
+# codage des caractères : ni la langue (déjà fixée par SET_LANG), ni les nombres
+# (déjà séparés par un point en locale C). Si C.UTF-8 n'existe pas, on rend la
+# locale d'origine et l'affichage reste ce qu'il était.
+ENSURE_UTF8() {
+    local probe=$'é'
+    local saved="${LC_ALL-}"
+    (( ${#probe} == 1 )) && return 0
+    export LC_ALL='C.UTF-8'
+    (( ${#probe} == 1 )) && return 0
+    if [[ -n "${saved}" ]]; then
+        export LC_ALL="${saved}"
+    else
+        unset LC_ALL
+    fi
+    return 0
+}
+
 # t CLÉ [ARG…] -> TXT, les marques {1}, {2}… étant remplacées dans l'ordre.
 # Substitution par découpage et non par ${var//motif/texte} : un argument peut
 # contenir « & » ou « \ », caractères spéciaux du remplacement de motif (un
@@ -1973,6 +1996,21 @@ HPAD() {
     return 0
 }
 
+# Ligne d'une boîte modale : toute la ligne du terminal est réécrite — décalage
+# à gauche, cadre, effacement de la fin — le fond de la boîte ne s'appliquant
+# qu'au cadre, les marges restant vides. Sans cela la fenêtre ne couvrait que son
+# rectangle : les colonnes du tableau ressortaient à gauche du cadre et la fin
+# des lignes de droite restait visible (détails dès qu'il y a 7 colonnes de
+# marge, aide au-delà d'une centaine de colonnes). BOX_ROW LIGNE DÉCALAGE FOND
+# AVANT-PLAN RÉINIT TEXTE.
+BOX_ROW() {
+    local -i y="$1" lead="$2"
+    local bg="$3" fg="$4" rst="$5" txt="$6"
+    printf '\033[%d;1H%s%*s%s%s%s%s\033[K' \
+        "${y}" "${rst}" "${lead}" '' "${fg}" "${bg}" "${txt}" "${rst}"
+    return 0
+}
+
 HELP_OVERLAY() {
     local -a ktxt dtxt
     local -i n cols keyw descw cellw bw bh rows x0 y0 r c idx inner pad avail
@@ -2001,8 +2039,18 @@ HELP_OVERLAY() {
     elif (( WIDTH >= 56 && n > HEIGHT - 4 )); then
         cols=2
     fi
-    keyw=12
-    (( WIDTH < 70 )) && keyw=10
+    # Largeur de la colonne des touches : la plus longue, plus une espace. Une
+    # largeur fixe (12, puis 10 sous 70 colonnes) coupait les noms de touches —
+    # « double-click » sortait en « double-cli », « Début / Fin » en
+    # « Début / Fi » — alors qu'une description tronquée reste lisible : on
+    # préfère rogner la phrase que la touche.
+    keyw=0
+    for desc in "${ktxt[@]}"; do
+        (( ${#desc} > keyw )) && keyw=${#desc}
+    done
+    (( keyw < 6 )) && keyw=6
+    (( keyw > 16 )) && keyw=16
+    keyw=$(( keyw + 1 ))
     # La plus longue description décide de la disposition : en deux colonnes la
     # colonne est forcément étroite (43 caractères à 120 colonnes de terminal) et
     # « augmenter / diminuer le taux de rafraîchissement » finissait en ellipse.
@@ -2044,7 +2092,7 @@ HELP_OVERLAY() {
     line="${tl}${hz}${title}"
     while (( ${#line} < bw - 1 )); do line+="${hz}"; done
     line+="${tr}"
-    printf '%s\033[%d;%dH%s%s%s\033[K' "${bg}" "${y0}" "${x0}" "${Blanc}" "${line}" "${reset}"
+    BOX_ROW "${y0}" "$(( x0 - 1 ))" "${bg}" "${Blanc}" "${reset}" "${line}"
 
     for ((r = 0; r < rows; r++)); do
         line="${bv}"
@@ -2064,21 +2112,23 @@ HELP_OVERLAY() {
             fi
         done
         line+="${bv}"
-        printf '%s\033[%d;%dH%s%s%s\033[K' "${bg}" "$(( y0 + 1 + r ))" "${x0}" "${Blanc}" "${line}" "${reset}"
+        BOX_ROW "$(( y0 + 1 + r ))" "$(( x0 - 1 ))" "${bg}" "${Blanc}" "${reset}" "${line}"
     done
 
     hint="${TR[help_close]}"
+    # même garde-fou que dans la boîte des détails : l'aide ne dépasse pas
+    (( ${#hint} > inner - 2 )) && hint="${hint:0:$(( inner - 3 ))}…"
     pad=$(( (inner - ${#hint}) / 2 ))
     (( pad < 1 )) && pad=1
     line="${bv}$(printf '%*s' "${pad}" '')${Gris}${hint}${ResetFg}"
     line+=$(HPAD '' "$(( inner - pad - ${#hint} ))")
     line+="${bv}"
-    printf '%s\033[%d;%dH%s%s%s\033[K' "${bg}" "$(( y0 + 1 + rows ))" "${x0}" "${Blanc}" "${line}" "${reset}"
+    BOX_ROW "$(( y0 + 1 + rows ))" "$(( x0 - 1 ))" "${bg}" "${Blanc}" "${reset}" "${line}"
 
     line="${bl}"
     for ((i = 0; i < inner; i++)); do line+="${hz}"; done
     line+="${br}"
-    printf '%s\033[%d;%dH%s%s%s\033[K' "${bg}" "$(( y0 + rows + 2 ))" "${x0}" "${Blanc}" "${line}" "${reset}"
+    BOX_ROW "$(( y0 + rows + 2 ))" "$(( x0 - 1 ))" "${bg}" "${Blanc}" "${reset}" "${line}"
 
     # modale : on attend une touche (n'importe laquelle)
     MODAL_KEY
@@ -2425,7 +2475,7 @@ PROC_INFO() {
 # première ligne montrée. DET_TOP est ramené dans les bornes ici, ce qui
 # dispense les appelants de les recalculer ; DET_VIEW n'est jamais écrasé.
 DET_DRAW() {
-    local title="$1" line spaces
+    local title="$1" line spaces hint
     local -i i pad rows view bh bw x0 y0 inner sx hintrows total
     inner="${DET_INNER}"
     (( ${#DET_ROWS[@]} < 1 )) && DET_RAW '' 0
@@ -2468,31 +2518,36 @@ DET_DRAW() {
     line="${DET_TL}${DET_HZ}${title}"
     while (( ${#line} < bw - 1 )); do line+="${DET_HZ}"; done
     line+="${DET_TR}"
-    printf '%s\033[%d;%dH%s%s%s\033[K' "${DET_BG}" "${y0}" "${x0}" "${Blanc}" "${line}" "${DET_RS}"
+    BOX_ROW "${y0}" "$(( x0 - 1 ))" "${DET_BG}" "${Blanc}" "${DET_RS}" "${line}"
 
     for (( i = 0; i < rows; i++ )); do
         pad=$(( inner - ${DET_W[DET_TOP + i]:-0} ))
         (( pad < 0 )) && pad=0
         printf -v spaces '%*s' "${pad}" ''
-        printf '%s\033[%d;%dH%s%s%s' "${DET_BG}" "$(( y0 + 1 + i ))" "${x0}" \
-            "${Blanc}" "${DET_BV}${DET_ROWS[DET_TOP + i]}${spaces}${DET_BV}" "${DET_RS}"
+        BOX_ROW "$(( y0 + 1 + i ))" "$(( x0 - 1 ))" "${DET_BG}" "${Blanc}" "${DET_RS}" \
+            "${DET_BV}${DET_ROWS[DET_TOP + i]}${spaces}${DET_BV}"
     done
 
     if (( hintrows == 1 )); then
-        pad=$(( (inner - ${#DET_HINT}) / 2 ))
+        # l'aide est rognée à la largeur de la boîte : plus longue que l'intérieur
+        # (80 colonnes suffisaient), elle débordait du cadre et repoussait la
+        # bordure droite d'autant — la ligne d'aide passait même à la suivante.
+        hint="${DET_HINT}"
+        (( ${#hint} > inner - 2 )) && hint="${hint:0:$(( inner - 3 ))}…"
+        pad=$(( (inner - ${#hint}) / 2 ))
         (( pad < 1 )) && pad=1
         printf -v spaces '%*s' "${pad}" ''
         # dernière ligne (x / X, y… ) en gras : c'est l'action à retenir
-        line="${DET_BV}${spaces}${Gras}${DET_GRIS}${DET_HINT}${DET_RST}"
-        printf -v spaces '%*s' "$(( inner - pad - ${#DET_HINT} ))" ''
+        line="${DET_BV}${spaces}${Gras}${DET_GRIS}${hint}${DET_RST}"
+        printf -v spaces '%*s' "$(( inner - pad - ${#hint} ))" ''
         line+="${spaces}${DET_BV}"
-        printf '%s\033[%d;%dH%s%s%s' "${DET_BG}" "$(( y0 + 1 + rows ))" "${x0}" "${Blanc}" "${line}" "${DET_RS}"
+        BOX_ROW "$(( y0 + 1 + rows ))" "$(( x0 - 1 ))" "${DET_BG}" "${Blanc}" "${DET_RS}" "${line}"
     fi
 
     line="${DET_BL}"
     for (( i = 0; i < inner; i++ )); do line+="${DET_HZ}"; done
     line+="${DET_BR}"
-    printf '%s\033[%d;%dH%s%s%s' "${DET_BG}" "$(( y0 + rows + 1 + hintrows ))" "${x0}" "${Blanc}" "${line}" "${DET_RS}"
+    BOX_ROW "$(( y0 + rows + 1 + hintrows ))" "$(( x0 - 1 ))" "${DET_BG}" "${Blanc}" "${DET_RS}" "${line}"
 
     if (( y0 > 1 )); then
         sx=$(( WIDTH - STATUSW + 1 ))
@@ -2833,6 +2888,9 @@ MAIN() {
     [[ -t 1 ]] && TTY=1
     STDIN_TTY=0
     [[ -t 0 ]] && STDIN_TTY=1
+    # interface plein écran seulement : un pipe ou une redirection garde la
+    # locale demandée (sortie ASCII sous LC_ALL=C, comme ps)
+    (( TTY == 1 && STDIN_TTY == 1 )) && ENSURE_UTF8
 
     # shellcheck disable=SC2310  # le message est déjà affiché par INIT_PATHS
     INIT_PATHS || QUIT 1

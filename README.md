@@ -195,6 +195,12 @@ descriptions and the log file. Code comments stay in French, and the technical
 labels (`PID`, `USER`, `MiB`, `%CPU`, `TOTAL (displayed)`, `proc`) are the same
 in both languages.
 
+The full-screen interface counts text in characters, so it needs a multibyte
+locale. When the locale is not UTF-8 (for example `LC_ALL=C psim`, the easiest
+way to get English), psim sets its own `LC_ALL` to `C.UTF-8` before drawing, so
+that the frames stay aligned. Pipes and redirections are left alone and keep
+their ASCII output.
+
 ## Development
 
 ```bash

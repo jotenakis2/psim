@@ -437,6 +437,16 @@ statut, l'aide en surimpression, la fiche du processus, la confirmation de
 terminaison et le journal.
 La page de manuel suit, elle, la recherche habituelle de
 .BR man (1).
+.PP
+L'interface plein écran mesure le texte en caractères : elle a besoin d'une
+locale multibyte. Quand la locale n'est pas UTF\-8 (par exemple
+.B LC_ALL=C
+pour obtenir l'anglais), psim bascule sa propre
+.B LC_ALL
+sur
+.B C.UTF\-8
+avant de dessiner, pour que le compte des caractères corresponde au terminal.
+Les pipes et les redirections ne sont pas touchés et gardent leur sortie ASCII.
 .TP
 .B PSIM_MOUSE_DEBUG
 Si la variable est définie et non vide, les événements souris décodés sont

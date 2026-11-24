@@ -199,6 +199,12 @@ commentaires du code restent en français, et les étiquettes techniques (`PID`,
 `USER`, `MiB`, `%CPU`, `TOTAL (displayed)`, `proc`) sont identiques dans les
 deux langues.
 
+L'interface plein écran compte le texte en caractères : il lui faut une locale
+multibyte. Quand la locale n'est pas UTF-8 (par exemple `LC_ALL=C psim`, le
+moyen le plus simple d'obtenir l'anglais), psim bascule sa propre `LC_ALL` sur
+`C.UTF-8` avant de dessiner, pour que les cadres restent alignés. Les pipes et
+les redirections ne sont pas touchés et gardent leur sortie ASCII.
+
 ## Développement
 
 ```bash

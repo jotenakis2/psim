@@ -427,6 +427,17 @@ shortcut overlay, the process box, the kill confirmation and the log file.
 The manual page itself follows the usual
 .BR man (1)
 locale lookup.
+.PP
+The full\-screen interface measures text in characters, so it needs a multibyte
+locale.
+When the locale is not UTF\-8 (for example
+.B LC_ALL=C
+to get English), psim sets its own
+.B LC_ALL
+to
+.B C.UTF\-8
+before drawing, so that character counts match the terminal.
+Pipes and redirections are left alone and keep their ASCII output.
 .TP
 .B PSIM_MOUSE_DEBUG
 When set and non\-empty, append decoded mouse events to
