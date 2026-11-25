@@ -7,7 +7,7 @@ filter, process tree, and a dynamic mode with keyboard shortcuts.
 The same binary stays usable inside a pipe or a redirection, without ANSI
 sequences or truncation.
 
-Version 1.20.0 — GPLv3. Original author: jotenakis.
+Version 1.20.1 — GPLv3. Original author: jotenakis.
 
 ## Features
 
