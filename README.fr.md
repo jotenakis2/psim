@@ -9,6 +9,11 @@ ANSI ni troncature.
 
 Version 1.20.2 — GPLv3. Auteur original : jotenakis.
 
+![psim — arbre des processus, arguments et bandeau CPU instantané](screenshot.png)
+
+*Affichage complet, arbre des processus, arguments, et bandeau CPU instantané
+sous le pied de page.*
+
 ## Fonctionnalités
 
 - **Mode dynamique** sur un terminal (rafraîchissement, tri, filtre, sélection,

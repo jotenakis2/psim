@@ -9,6 +9,11 @@ sequences or truncation.
 
 Version 1.20.2 — GPLv3. Original author: jotenakis.
 
+![psim — process tree, command arguments and the instantaneous CPU band](screenshot.png)
+
+*Full display, process tree, command arguments, and the instantaneous CPU band
+under the footer.*
+
 ## Features
 
 - **Dynamic mode** on a terminal (refresh, sort, filter, selection, details,
