@@ -104,7 +104,9 @@ psim [OPTIONS] [--N]
 | `-g`, `--filter PATTERN` | ERE filter (user + command + arguments) |
 | `-w`, `--watch N` | refresh every N s, decimals accepted (`0` = static) |
 | `-H`, `--no-header` | hide the header |
+| `--header` | show the header (cancels `-H`, `HEADER=0`) |
 | `-F`, `--no-footer` | hide the footer |
+| `--footer` | show the footer (cancels `-F`, `FOOTER=0`) |
 | `-O`, `--fullcmd` | full path and arguments |
 | `-0`, `--no-color` | no colours |
 | `-M`, `--machine-cpu` | %CPU of rows as a share of the machine (the footer stays machine-wide) |

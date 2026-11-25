@@ -126,9 +126,25 @@ ranges from 0 to 3599.
 Hide the header line.
 Static output never prints a header.
 .TP
+.B \-\-header
+Show the header line.
+Cancels
+.BR \-H ,
+and a
+.B HEADER=0
+from the configuration file.
+.TP
 .B \-F, \-\-no-footer
 Hide the footer line.
 Static output never prints a footer.
+.TP
+.B \-\-footer
+Show the footer line.
+Cancels
+.BR \-F ,
+and a
+.B FOOTER=0
+from the configuration file.
 .TP
 .B \-O, \-\-fullcmd
 Show the full command line, with arguments, instead of the command name alone.

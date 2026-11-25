@@ -107,7 +107,9 @@ psim [OPTIONS] [--N]
 | `-g`, `--filter MOTIF` | filtre ERE (utilisateur + commande + arguments) |
 | `-w`, `--watch N` | rafraîchir toutes les N s, décimales acceptées (`0` = statique) |
 | `-H`, `--no-header` | masquer l'entête |
+| `--header` | afficher l'entête (annule `-H`, `HEADER=0`) |
 | `-F`, `--no-footer` | masquer le pied de page |
+| `--footer` | afficher le pied de page (annule `-F`, `FOOTER=0`) |
 | `-O`, `--fullcmd` | chemin complet et arguments |
 | `-0`, `--no-color` | sans couleurs |
 | `-M`, `--machine-cpu` | %CPU des lignes en pourcentage de la machine (le pied reste en % machine) |

@@ -648,7 +648,9 @@ ${Vert}OPTIONS${Reset}
    ${Bleu}-g, --filter MOTIF${Reset}     filtre ERE (utilisateur + commande + arguments)
    ${Bleu}-w, --watch N${Reset}          rafraîchir toutes les N s, décimales acceptées (0 = statique)
    ${Bleu}-H, --no-header${Reset}        masquer l'entête
+   ${Bleu}    --header${Reset}           afficher l'entête (annule --no-header)
    ${Bleu}-F, --no-footer${Reset}        masquer le pied de page
+   ${Bleu}    --footer${Reset}           afficher le pied de page (annule --no-footer)
    ${Bleu}-O, --fullcmd${Reset}          chemin complet et arguments
    ${Bleu}-0, --no-color${Reset}         sans couleurs
    ${Bleu}-M, --machine-cpu${Reset}      %CPU des lignes en % de la machine (défaut : par cœur)
@@ -685,7 +687,9 @@ ${Vert}OPTIONS${Reset}
    ${Bleu}-g, --filter PATTERN${Reset}   ERE filter (user + command + arguments)
    ${Bleu}-w, --watch N${Reset}          refresh every N s, decimals accepted (0 = static)
    ${Bleu}-H, --no-header${Reset}        hide the header
+   ${Bleu}    --header${Reset}           show the header (cancels --no-header)
    ${Bleu}-F, --no-footer${Reset}        hide the footer
+   ${Bleu}    --footer${Reset}           show the footer (cancels --no-footer)
    ${Bleu}-O, --fullcmd${Reset}          full path and arguments
    ${Bleu}-0, --no-color${Reset}         no colours
    ${Bleu}-M, --machine-cpu${Reset}      %CPU of rows as a share of the machine (default: per core)
@@ -998,7 +1002,9 @@ PARSE_ARGS() {
             -k|--kernel) k=1; shift ;;
             -K|--kernel-only) konly=1; shift ;;
             -H|--no-header) HEADER=0; shift ;;
+            --header) HEADER=1; shift ;;          # annule -H ou HEADER=0
             -F|--no-footer) FOOTER=0; shift ;;
+            --footer) FOOTER=1; shift ;;          # annule -F ou FOOTER=0
             -O|--fullcmd) SHOW_OPTS=1; shift ;;
             -0|--no-color) NO_COLOR=1; shift ;;
             -M|--machine-cpu) CPU_MODE=1; shift ;;
