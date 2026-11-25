@@ -21,6 +21,9 @@ Version 1.10.1 — GPLv3. Original author: jotenakis.
   active sort. A parent missing from the view yields a forest, not a cut branch.
 - **Real %CPU**, per core (default) or as a share of the machine (`-M`); the
   footer, `TOTAL (displayed)`, is always machine-wide.
+- **CPU band**: three braille lines under the footer with the *instantaneous*
+  machine CPU (two `/proc/stat` readings, `instant cpu N %` badge), 12 levels
+  over `2 × width` samples; `b` hides it, `BAND=0..3` in the configuration.
 - **Clean output** in a pipe: `psim > list.txt`, `psim -k | grep ssh`.
 - **Configuration** validated key by key (`~/.config/psim/default.conf`), never
   evaluated as shell.
@@ -135,6 +138,7 @@ psim -k | grep kworker      # inside a pipe
 | `t` | process tree |
 | `k` | kernel threads: hidden / included / only |
 | `h` `f` | header / footer |
+| `b` | CPU band on / off |
 | `M` | %CPU of the machine or per core |
 | `←` `→` | compact / extended view |
 | `↑` `↓` | select (holding accelerates); Esc releases |
@@ -159,6 +163,7 @@ evaluated as shell; an unknown key or an invalid value is reported then ignored.
 ```conf
 # display
 NEWBIE=1          # 1 = compact, 0 = full columns
+BAND=3            # braille CPU band lines under the footer (0 = off)
 HEADER=1
 FOOTER=1
 NO_COLOR=0

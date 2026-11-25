@@ -207,6 +207,18 @@ therefore capped at 100 %. The displayed and total process counts follow.
 In interactive mode, a status line to the right of the header reports the
 refresh interval, the active filter, the freeze state and the scroll position.
 When the header is hidden, the status is printed on the last line instead.
+.PP
+With enough room, a three\-line braille band under the footer shows the
+machine's CPU as it is right now: two readings of
+.I /proc/stat
+give the busy share of all cores, drawn over 12 levels (two samples per
+character), with an
+.B instant cpu N %
+badge on its last drawn line.
+This is psim's only instantaneous measure; the per\-process %CPU stays the
+average
+.BR ps (1)
+reports over each process's lifetime.
 .SH "INTERACTIVE MODE"
 Interactive mode is entered when both standard input and standard output are
 terminals and neither
@@ -259,6 +271,9 @@ Toggle the header.
 .TP
 .B f
 Toggle the footer.
+.TP
+.B b
+Hide or recall the CPU band.
 .TP
 .B o
 Toggle the command line column.
@@ -341,6 +356,10 @@ Recognised keys:
 .TP
 .B NEWBIE
 1 for the simplified table, 0 for the full table.
+.TP
+.B BAND
+Height in lines of the braille CPU band under the footer: 0 (hidden) to 3
+(default). It is dropped when the table would keep fewer than five rows.
 .TP
 .B INTERVAL
 Refresh interval in seconds, 0 to 3599; 0 means static.

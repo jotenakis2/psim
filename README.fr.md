@@ -22,6 +22,10 @@ Version 1.10.1 — GPLv3. Auteur original : jotenakis.
   branche coupée.
 - **%CPU** réel, par cœur (défaut) ou en pourcentage de la machine (`-M`) ; le
   pied de page, `TOTAL (affiché)`, reste toujours en % de la machine.
+- **Bandeau CPU** : trois lignes de braille sous le pied de page avec le CPU
+  *instantané* de la machine (deux relevés de `/proc/stat`, badge
+  `instant cpu N %`), 12 niveaux sur `2 × largeur` échantillons ; `b` le masque,
+  `BAND=0..3` dans la configuration.
 - **Sortie propre** dans un pipe : `psim > liste.txt`, `psim -k | grep ssh`.
 - **Configuration** validée clé par clé (`~/.config/psim/default.conf`), jamais
   évaluée comme du shell.
@@ -137,6 +141,7 @@ psim -k | grep kworker      # dans un pipe
 | `t` | arbre des processus |
 | `k` | threads noyau : masqués / inclus / seuls |
 | `h` `f` | entête / pied de page |
+| `b` | bandeau CPU on / off |
 | `M` | %CPU machine ou par cœur |
 | `←` `→` | affichage simplifié / étendu |
 | `↑` `↓` | sélectionner (maintenir accélère) ; Échap relâche |
@@ -162,6 +167,7 @@ signalée puis ignorée.
 ```conf
 # affichage
 NEWBIE=1          # 1 = simplifié, 0 = colonnes complètes
+BAND=3            # lignes du bandeau CPU en braille sous le pied (0 = masqué)
 HEADER=1
 FOOTER=1
 NO_COLOR=0

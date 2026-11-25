@@ -39,6 +39,7 @@ readonly MIN_W=60          # en dessous : refus du mode dynamique
 readonly MIN_H=6
 readonly INTERVAL_MAX=3599 # intervalle maximal, en secondes
 readonly LOG_MAX=262144    # rotation du journal (octets)
+readonly BAND_MAX=3        # hauteur maximale du bandeau CPU (lignes)
 
 # Glyphe Nerd Font du statut (horloge de l'intervalle)
 readonly ICON_CLOCK=$'\uF449'
@@ -73,6 +74,9 @@ declare -i FILTER_EDIT=0 FILTER_INVALID=0
 # le gel est un état séparé (FREEZE) : geler n'écrase plus la cadence.
 declare -i NEWBIE=1 INTERVAL=100 HEADER=1 FOOTER=1 NO_COLOR=0
 declare -i KERNEL=0 STATIC=1 SHOW_OPTS=0 FREEZE=0 LOG=1 DEBUG=0 CPU_MODE=0
+# Bandeau CPU : BAND lignes en braille sous le pied de page (0 = masqué).
+# BAND_SAVE garde la hauteur choisie pour que la touche b la restitue.
+declare -i BAND=0 BAND_SAVE=3
 # NO_CONFIG=1 : le fichier de configuration n'est pas lu du tout (--no-config).
 # Le drapeau est posé avant LOAD_CONFIG, voir MAIN.
 declare -i NO_CONFIG=0
@@ -97,6 +101,11 @@ declare -i ISANC=0 ASKED=0 KILL_OK=0
 declare INTERVAL_TXT='1'          # INTERVAL en forme « 0.25 » pour read -t / sleep
 declare SAMPLE=''                 # dernier échantillon ps, réutilisé pendant le gel
 declare -i KEY_GOT=0              # HANDLE_KEY a-t-elle traité une touche ?
+# Bandeau : /proc/stat n'est lu qu'en mode dynamique, une fois par trame. CPUS
+# garde les derniers pourcentages (2 points par caractère braille), CPU_PT et
+# CPU_PI les totaux précédents, CPU_PCT la dernière mesure instantanée.
+declare -a CPUS=() BR=()
+declare -i CPU_PT=0 CPU_PI=0 CPU_PCT=0 CPU_HAVE=0
 declare SORT="-%cpu"
 declare FILTER="" FILTER_BUF="" FILTER_SAVE=""
 declare -i NCPU=1
@@ -236,6 +245,8 @@ CATALOG_FR() {
         [gawk_bs]='dans gawk, « \b » est un backspace : utilisez « \y » pour une limite de mot'
 
         [total]='TOTAL (affiché)'
+        [cpu_badge]=' instant cpu {1} % '
+        [cfg_band]='BAND doit valoir 0, 1, 2 ou 3 (ignoré)'
         [st_invalid]='invalide'
         [st_frozen]='GEL'
         [st_tree]='arbre'
@@ -284,14 +295,14 @@ CATALOG_FR() {
         [help_title_short]=' AIDE '
         [help_close]='une touche pour fermer'
     )
-    HK=( 'c' 'C' 'm' 'p' 'P' 'N' 'u' 'M' 'o' 'k' 'h' 'f' '/' '- / +'
+    HK=( 'c' 'C' 'm' 'p' 'P' 'N' 'u' 'M' 'o' 'k' 'h' 'f' 'b' '/' '- / +'
          'F' '↑ / ↓' 'clic' 'double-clic' 'PgUp / PgDn' 'Début / Fin' 'Échap'
          'Entrée / d' 'x / X' '← / →'
          't' 'q' '?' )
     HD=( 'trier par %CPU' 'trier par commande' 'trier par mémoire' 'trier par PID'
          'trier par PPID' 'trier par nice' 'trier par utilisateur' '%CPU : cœur / machine'
          'options des commandes' 'threads noyau (cycle)' 'entête on / off'
-         'pied de page on / off' 'filtrer (Entrée / Échap)'
+         'pied de page on / off' 'bandeau cpu on / off' 'filtrer (Entrée / Échap)'
          'augmenter / diminuer le taux de rafraîchissement'
          'gel / dégel' 'sélectionner (tenir = accélère)'
          'sélectionner la ligne' 'détails du processus' "défiler d'une page"
@@ -333,6 +344,8 @@ CATALOG_EN() {
         [gawk_bs]='in gawk, « \b » is a backspace: use « \y » for a word boundary'
 
         [total]='TOTAL (displayed)'
+        [cpu_badge]=' instant cpu {1} % '
+        [cfg_band]='BAND must be 0, 1, 2 or 3 (ignored)'
         [st_invalid]='invalid'
         [st_frozen]='FROZEN'
         [st_tree]='tree'
@@ -381,14 +394,14 @@ CATALOG_EN() {
         [help_title_short]=' HELP '
         [help_close]='press any key to close'
     )
-    HK=( 'c' 'C' 'm' 'p' 'P' 'N' 'u' 'M' 'o' 'k' 'h' 'f' '/' '- / +'
+    HK=( 'c' 'C' 'm' 'p' 'P' 'N' 'u' 'M' 'o' 'k' 'h' 'f' 'b' '/' '- / +'
          'F' '↑ / ↓' 'click' 'double-click' 'PgUp / PgDn' 'Home / End' 'Esc'
          'Enter / d' 'x / X' '← / →'
          't' 'q' '?' )
     HD=( 'sort by %CPU' 'sort by command' 'sort by memory' 'sort by PID'
          'sort by PPID' 'sort by nice' 'sort by user' '%CPU: per core / machine'
          'command options' 'kernel threads (cycle)' 'header on / off'
-         'footer on / off' 'filter (Enter / Esc)'
+         'footer on / off' 'cpu band on / off' 'filter (Enter / Esc)'
          'increase / decrease refresh rate'
          'freeze / thaw' 'select (hold to accelerate)'
          'select the row' 'process details' 'scroll one page'
@@ -483,6 +496,7 @@ PARSE_INTERVAL() {
 CONFIG_DEFAULTS() {
     NEWBIE=1
     INTERVAL=100
+    BAND="${BAND_MAX}"
     HEADER=1
     FOOTER=1
     NO_COLOR=0
@@ -551,6 +565,15 @@ LOAD_CONFIG() {
                     (( INTERVAL == 0 )) && STATIC=1
                 else
                     t cfg_interval "${INTERVAL_MAX}"
+                    CFG_WARN "${n}"
+                    bad=$((bad + 1))
+                fi
+                ;;
+            BAND)
+                if [[ "${val}" =~ ^[0-3]$ ]]; then
+                    BAND="${val}"
+                else
+                    t cfg_band
                     CFG_WARN "${n}"
                     bad=$((bad + 1))
                 fi
@@ -708,7 +731,7 @@ ${Vert}RACCOURCIS (dynamique)${Reset}
    /  filtre     Enter valider  Échap annuler     Ctrl-U effacer
    c/m/p/P/N/u/C tri            o  options        M  %CPU machine
    t  arbre     k  noyau
-   h  entête     f  pied        ?  aide         q  quitter
+   h  entête     f  pied     b  bande   ?  aide   q  quitter
    +/-  délai    F  gel/dégel (arrête ps)   ←/→  newbie/étendu
    ↑/↓  sélectionner (la vue suit aux bords ; maintenir la flèche accélère)
          Échap  relâcher
@@ -732,6 +755,15 @@ ${Vert}DÉLAI${Reset}
    trier, filtrer, passer en arbre ou ouvrir les détails travaillent dessus
    sans rééchantillonner ; ${Jaune}F${Reset} reprend à la cadence d'avant.
 
+${Vert}BANDEAU CPU${Reset}
+   Trois lignes de braille sous le pied de page donnent le pouls de la machine :
+   12 niveaux, deux points par caractère, ${Jaune}2×largeur${Reset} échantillons (30 s à 120
+   colonnes et 0,25 s). Le badge ${Jaune}instant cpu N %${Reset} est la seule mesure
+   ${Jaune}instantanée${Reset} de psim : deux relevés de ${Jaune}/proc/stat${Reset}, alors que le %CPU des
+   lignes reste la moyenne de ${Jaune}ps${Reset} sur la vie des processus. ${Jaune}b${Reset} masque ou
+   rappelle la bande ; ${Jaune}BAND=0${Reset} démarre sans elle, ${Jaune}BAND=1..3${Reset} la règle plus
+   courte. Elle disparaît d'elle-même si le tableau n'a plus cinq lignes.
+
 ${Vert}FILTRE INTERACTIF${Reset}
    ${Jaune}/${Reset} ouvre la saisie : le motif se construit caractère par caractère et la liste
    se filtre en direct (Entrée valide, Échap annule, Backspace efface, Ctrl-U vide).
@@ -751,7 +783,7 @@ ${Vert}PIPE / REDIRECTION${Reset}
 
 ${Vert}CONFIGURATION${Reset}
    ${Bleu}${CONFIG}${Reset} — une clé par ligne, ${Jaune}CLÉ=VALEUR${Reset}.
-   Clés : NEWBIE INTERVAL KERNEL SORT FILTER SHOW_OPTS HEADER FOOTER
+   Clés : NEWBIE BAND INTERVAL KERNEL SORT FILTER SHOW_OPTS HEADER FOOTER
           NO_COLOR LOG DEBUG CPU_MODE TREE (STATS : ancienne clé, sans effet)
    Le fichier n'est jamais interprété comme du shell ; les clés inconnues
    sont signalées puis ignorées. ${Jaune}--no-config${Reset} ne le lit pas du tout : la
@@ -795,7 +827,7 @@ ${Vert}SHORTCUTS (dynamic)${Reset}
    /  filter     Enter apply  Esc cancel       Ctrl-U clear
    c/m/p/P/N/u/C sort           o  options      M  machine %CPU
    t  tree      k  kernel
-   h  header    f  footer       ?  help         q  quit
+   h  header    f  footer    b  band    ?  help   q  quit
    +/-  interval  F  freeze/thaw (stops ps)  ←/→  compact/extended
    ↑/↓  select (the view follows at the edges; holding the key accelerates)
          Esc  release
@@ -819,6 +851,15 @@ ${Vert}INTERVAL${Reset}
    sorting, filtering, the tree or the details work on that snapshot without
    sampling again; ${Jaune}F${Reset} resumes at the previous cadence.
 
+${Vert}CPU BAND${Reset}
+   Three braille lines under the footer give the machine's pulse: 12 levels,
+   two dots per character, ${Jaune}2×width${Reset} samples (30 s at 120 columns and 0.25 s).
+   The ${Jaune}instant cpu N %${Reset} badge is psim's only ${Jaune}instantaneous${Reset} measure: two reads
+   of ${Jaune}/proc/stat${Reset}, while the %CPU column stays the average ${Jaune}ps${Reset} reports over
+   the life of each process. ${Jaune}b${Reset} hides or recalls the band; ${Jaune}BAND=0${Reset} starts
+   without it, ${Jaune}BAND=1..3${Reset} makes it shorter. It disappears by itself when the
+   table would have fewer than five rows.
+
 ${Vert}INTERACTIVE FILTER${Reset}
    ${Jaune}/${Reset} opens the prompt: the pattern is built character by character and the list
    filters live (Enter applies, Esc cancels, Backspace deletes, Ctrl-U clears).
@@ -838,7 +879,7 @@ ${Vert}PIPE / REDIRECTION${Reset}
 
 ${Vert}CONFIGURATION${Reset}
    ${Bleu}${CONFIG}${Reset} — one key per line, ${Jaune}KEY=VALUE${Reset}.
-   Keys: NEWBIE INTERVAL KERNEL SORT FILTER SHOW_OPTS HEADER FOOTER
+   Keys: NEWBIE BAND INTERVAL KERNEL SORT FILTER SHOW_OPTS HEADER FOOTER
          NO_COLOR LOG DEBUG CPU_MODE TREE (STATS: legacy key, no effect)
    The file is never evaluated as shell; unknown keys are reported and
    ignored. ${Jaune}--no-config${Reset} skips it entirely: the session starts from
@@ -2043,6 +2084,14 @@ HANDLE_KEY() {
             o) SHOW_OPTS=$((1 - SHOW_OPTS)) ;;
             k) KERNEL=$(( (KERNEL + 1) % 3 )) ;;
             t) TREE=$((1 - TREE)); OFFSET=0 ;;
+            b)                              # bandeau CPU on / off
+                if (( BAND > 0 )); then
+                    BAND_SAVE=${BAND}
+                    BAND=0
+                else
+                    BAND=${BAND_SAVE:-${BAND_MAX}}
+                fi
+                ;;
             h) HEADER=$((1 - HEADER)) ;;
             f) FOOTER=$((1 - FOOTER)) ;;
             '?') HELP_OVERLAY ;;
@@ -2074,7 +2123,8 @@ HANDLE_KEY() {
             F)                              # gel : on cesse d'échantillonner
                 FREEZE=$(( 1 - FREEZE ))
                 SAMPLE=''                   # l'image gelée est prise à la trame suivante
-                ;;
+                CPU_PT=0                    # pas de pointe artificielle au dégel :
+                ;;                          # le premier relevé sert de référence
             c) SORT_TOGGLE "-%cpu" "%cpu"; OFFSET=0 ;;
             C) SORT_TOGGLE "cmd" "-cmd"; SHOW_OPTS=1; OFFSET=0 ;;
             N) SORT_TOGGLE "nice" "-nice"; OFFSET=0 ;;
@@ -2858,6 +2908,166 @@ KILL_SELECTED() {
 }
 
 ##############################################################################
+# Bandeau CPU (braille)
+#
+# C'est la seule mesure INSTANTANÉE de psim : deux relevés de /proc/stat
+# (première ligne = tous les cœurs), busy = 1 − Δ(idle+iowait)/Δtotal. Le reste
+# de l'écran vient de ps et reste une moyenne sur la vie des processus ; le
+# bandeau, lui, dit ce que fait la machine maintenant, comme la jauge de htop.
+#
+# Un caractère braille porte 2 points en largeur et 4 en hauteur : la bande fait
+# donc 2×WIDTH échantillons de large (un par paire de points) et 4×BAND niveaux
+# de haut (12 niveaux sur 3 lignes, soit des paliers de 8,3 %).
+##############################################################################
+
+# Construit la table des 256 caractères braille, une fois, au premier tracé.
+BR_TABLE() {
+    local -i b
+    local h
+    for (( b = 0; b < 256; b++ )); do
+        # deux printf -v (builtins) : un $( ) ici lançait 256 sous-shells au
+        # démarrage, soit ~400 ms de CPU
+        printf -v h '%04x' $(( 0x2800 + b ))
+        printf -v BR[b] '%b' "\\u${h}"
+    done
+    return 0
+}
+
+# Un relevé de /proc/stat et un point dans l'historique. Pas de fork : read est
+# un builtin, l'arithmétique est interne. Rien n'est échantillonné quand c'est
+# gelé : le bandeau se fige avec le reste.
+CPU_SAMPLE() {
+    local _cpu u n s i w irq sirq st _rest
+    local -i tot idle delta max
+    read -r _cpu u n s i w irq sirq st _rest < /proc/stat || return 0
+    tot=$(( u + n + s + i + w + irq + sirq + st ))
+    idle=$(( i + w ))
+    if (( CPU_PT > 0 && tot > CPU_PT )); then
+        delta=$(( tot - CPU_PT ))
+        CPU_PCT=$(( (delta - (idle - CPU_PI)) * 100 / delta ))
+        (( CPU_PCT < 0 )) && CPU_PCT=0
+        (( CPU_PCT > 100 )) && CPU_PCT=100
+        CPUS+=("${CPU_PCT}")
+        max=$(( 2 * WIDTH ))
+        while (( ${#CPUS[@]} > max )); do
+            CPUS=("${CPUS[@]:1}")
+        done
+        CPU_HAVE=1
+    fi
+    CPU_PT=${tot}
+    CPU_PI=${idle}
+    return 0
+}
+
+# DRAW_BAND LIGNE_HAUT HAUTEUR : trace la bande en positionnement absolu (elle
+# ne dépend pas de l'endroit où le tableau s'est arrêté), puis le badge de la
+# valeur courante, aligné à droite de la première ligne.
+#
+# Une seule passe par colonne pour les « rows » lignes : les niveaux ne sont
+# calculés qu'une fois, et la couleur (palier du plus fort des deux
+# échantillons) est émise pour toutes les lignes à la fois. Mesuré ~8 ms par
+# trame pour trois lignes de 120 colonnes (0,8 % d'un cœur à 1 Hz).
+DRAW_BAND() {
+    local -i top="${1}" rows="${2}" r c i base lvl_a lvl_b bits bw
+    local -i n=${#CPUS[@]} levels=$(( 4 * rows ))
+    local -i val_a val_b
+    local -a line=()
+    local cur_col col
+    (( ${#BR[@]} == 256 )) || BR_TABLE
+    for (( r = 0; r < rows; r++ )); do
+        line[r]=''
+    done
+    cur_col='unset'
+    for (( c = 0; c < WIDTH; c++ )); do
+        # l'historique est aligné à droite : les cases de gauche restent vides
+        # tant qu'il n'y a pas encore 2×WIDTH points
+        i=$(( 2 * c - (2 * WIDTH - n) ))
+        val_a=0
+        val_b=0
+        (( i >= 0 )) && val_a=${CPUS[i]}
+        (( i + 1 >= 0 && i + 1 < n )) && val_b=${CPUS[i + 1]}
+        # un point minimum dès qu'il y a du travail : à 12 niveaux, un point vaut
+        # 8,3 % et une machine à 3 % n'afficherait rien du tout
+        lvl_a=0
+        lvl_b=0
+        if (( val_a > 0 )); then
+            lvl_a=$(( val_a * levels / 100 ))
+            (( lvl_a < 1 )) && lvl_a=1
+        fi
+        if (( val_b > 0 )); then
+            lvl_b=$(( val_b * levels / 100 ))
+            (( lvl_b < 1 )) && lvl_b=1
+        fi
+        # couleur : inline et non dans une fonction, un appel par colonne coûtait
+        # plus cher que tout le reste (~20 ms sur 360 colonnes)
+        if (( val_a >= 80 || val_b >= 80 )); then
+            col="${Rouge}"
+        elif (( val_a >= 50 || val_b >= 50 )); then
+            col="${Jaune}"
+        else
+            col="${Vert}"
+        fi
+        if [[ "${col}" != "${cur_col}" ]]; then
+            if [[ "${cur_col}" != 'unset' ]]; then
+                for (( r = 0; r < rows; r++ )); do line[r]+="${ResetFg}"; done
+            fi
+            for (( r = 0; r < rows; r++ )); do line[r]+="${col}"; done
+            cur_col="${col}"
+        fi
+        # chemin court pour les cases vides : au repos, la plupart des cellules
+        # n'ont aucun point, et c'est ce cas qui décide du coût de la bande
+        if (( lvl_a < 1 && lvl_b < 1 )); then
+            for (( r = 0; r < rows; r++ )); do
+                line[r]+="${BR[0]}"
+            done
+            continue
+        fi
+        for (( r = 0; r < rows; r++ )); do
+            # base = niveau du bas de cette ligne (4 points par ligne)
+            base=$(( (rows - 1 - r) * 4 ))
+            if (( lvl_a <= base && lvl_b <= base )); then
+                line[r]+="${BR[0]}"
+                continue
+            fi
+            bits=0
+            i=$(( lvl_a - base ))
+            (( i < 0 )) && i=0
+            (( i > 4 )) && i=4
+            (( i >= 1 )) && bits=$(( bits | 0x40 ))
+            (( i >= 2 )) && bits=$(( bits | 0x04 ))
+            (( i >= 3 )) && bits=$(( bits | 0x02 ))
+            (( i >= 4 )) && bits=$(( bits | 0x01 ))
+            i=$(( lvl_b - base ))
+            (( i < 0 )) && i=0
+            (( i > 4 )) && i=4
+            (( i >= 1 )) && bits=$(( bits | 0x80 ))
+            (( i >= 2 )) && bits=$(( bits | 0x20 ))
+            (( i >= 3 )) && bits=$(( bits | 0x10 ))
+            (( i >= 4 )) && bits=$(( bits | 0x08 ))
+            line[r]+="${BR[bits]}"
+        done
+    done
+
+    for (( r = 0; r < rows; r++ )); do
+        line[r]+="${ResetFg}"
+        printf '\033[%d;1H%s' "$(( top + r ))" "${line[r]}"
+    done
+
+    # badge « instant cpu N % » : première ligne, aligné à droite
+    if (( CPU_HAVE == 1 )); then
+        t cpu_badge "${CPU_PCT}"
+    else
+        t cpu_badge '—'
+    fi
+    bw=${#TXT}
+    if (( bw < WIDTH - 1 )); then
+        printf '\033[%d;%dH%s%s%s%s' "${top}" "$(( WIDTH - bw + 1 ))" \
+            "${BgGris}" "${Blanc}" "${TXT}" "${Reset}"
+    fi
+    return 0
+}
+
+##############################################################################
 # Modes
 ##############################################################################
 # Une trame complète : bornes de la fenêtre, ps+awk, tableau, statut. Seul
@@ -2865,11 +3075,19 @@ KILL_SELECTED() {
 # boîte (détails -> confirmation) dessinent exactement la même image.
 DRAW_FRAME() {
     local -i bar=0 max_off
+    local -i band=0
     # le statut vit dans l'entête ; une ligne n'est réservée que si l'entête est
     # masquée, pour qu'il reste visible
     (( HEADER == 0 )) && bar=1
 
-    LIMIT=$(( HEIGHT - HEADER - FOOTER - bar ))
+    # bandeau CPU : il prend ses lignes en bas, sous le pied de page, et
+    # disparaît plutôt que de laisser moins de cinq lignes au tableau
+    (( FREEZE == 0 )) && CPU_SAMPLE
+    band=${BAND}
+    (( band > BAND_MAX )) && band=${BAND_MAX}
+    (( band > 0 && HEIGHT - HEADER - FOOTER - bar - band < 5 )) && band=0
+
+    LIMIT=$(( HEIGHT - HEADER - FOOTER - bar - band ))
     (( LIMIT < 1 )) && LIMIT=1
 
     READ_DRAWN
@@ -2879,12 +3097,16 @@ DRAW_FRAME() {
 
     printf '\033[H'
     RENDER 1 "${LIMIT}" "${HEADER}" "${FOOTER}"
+    if (( band > 0 )); then
+        # positionnement absolu : la bande ne dépend pas du curseur laissé par
+        # le tableau, et occupe toute la largeur sous le pied de page
+        DRAW_BAND "$(( HEIGHT - bar - band + 1 ))" "${band}"
+    fi
     if (( bar == 1 )); then
-        # pas d'effacement ici : la ligne du statut est réécrite par-dessus
-        # (un \033[J la blanchirait avant de la redessiner -> scintillement)
-        printf '\n'
+        # le statut passe sous la bande : ligne du bas, position absolue
+        printf '\033[%d;1H' "${HEIGHT}"
         PRINT_STATUS
-    else
+    elif (( band == 0 )); then
         # pas de ligne de statut : on nettoie sous le pied de page
         printf '\033[J'
     fi

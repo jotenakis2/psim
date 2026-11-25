@@ -215,6 +215,18 @@ En mode interactif, une ligne d'état à droite de l'entête signale la cadence
 de rafraîchissement, le filtre actif, l'état de gel et la position de
 défilement.
 Quand l'entête est masqué, l'état s'affiche sur la dernière ligne à la place.
+.PP
+Quand la place le permet, un bandeau braille de trois lignes sous le pied de
+page montre le CPU de la machine à l'instant présent : deux relevés de
+.I /proc/stat
+donnent la part occupée de tous les cœurs, dessinée sur 12 niveaux (deux
+échantillons par caractère), avec un badge
+.B instant cpu N %
+sur sa dernière ligne dessinée.
+C'est la seule mesure instantanée de psim ; le %CPU par processus reste la
+moyenne que
+.BR ps (1)
+rapporte sur la vie de chaque processus.
 .SH "MODE INTERACTIF"
 Le mode interactif est activé lorsque l'entrée et la sortie standard sont
 toutes deux des terminaux et qu'aucun
@@ -268,6 +280,9 @@ Basculer l'entête.
 .TP
 .B f
 Basculer le pied de page.
+.TP
+.B b
+Masquer ou rappeler le bandeau CPU.
 .TP
 .B o
 Basculer la colonne de ligne de commande.
@@ -350,6 +365,10 @@ Clés reconnues :
 .TP
 .B NEWBIE
 1 pour le tableau simplifié, 0 pour le tableau complet.
+.TP
+.B BAND
+Hauteur, en lignes, du bandeau CPU en braille sous le pied de page : de 0
+(masqué) à 3 (défaut). Il disparaît si le tableau ne garde pas cinq lignes.
 .TP
 .B INTERVAL
 Intervalle de rafraîchissement en secondes, de 0 à 3599 ; 0 signifie statique.
