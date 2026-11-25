@@ -7,7 +7,7 @@ filtre, arbre des processus, et un mode dynamique avec raccourcis clavier.
 Le même binaire reste utilisable dans un pipe ou une redirection, sans séquence
 ANSI ni troncature.
 
-Version 1.20.1 — GPLv3. Auteur original : jotenakis.
+Version 1.20.2 — GPLv3. Auteur original : jotenakis.
 
 ## Fonctionnalités
 
