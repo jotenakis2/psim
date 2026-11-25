@@ -2978,7 +2978,7 @@ DRAW_BAND() {
     local -i n=${#CPUS[@]} levels=$(( 4 * rows ))
     local -i val_a val_b
     local -a line=()
-    local cur_col col
+    local cur_col col bnum
     (( ${#BR[@]} == 256 )) || BR_TABLE
     for (( r = 0; r < rows; r++ )); do
         line[r]=''
@@ -3059,12 +3059,15 @@ DRAW_BAND() {
         printf '\033[%d;1H%s' "$(( top + r ))" "${line[r]}"
     done
 
-    # badge « instant cpu N % » : première ligne, aligné à droite
+    # badge « instant cpu N % » : première ligne, aligné à droite. Le nombre est
+    # cadré sur trois colonnes («   2 », «  10 », « 100 ») pour que le badge
+    # garde la même largeur et ne se décale plus quand la charge change.
     if (( CPU_HAVE == 1 )); then
-        t cpu_badge "${CPU_PCT}"
+        printf -v bnum '%3d' "${CPU_PCT}"
     else
-        t cpu_badge '—'
+        bnum='  —'
     fi
+    t cpu_badge "${bnum}"
     bw=${#TXT}
     if (( bw < WIDTH - 1 )); then
         printf '\033[%d;%dH%s%s%s%s' "${top}" "$(( WIDTH - bw + 1 ))" \
