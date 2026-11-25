@@ -157,6 +157,36 @@ Click: select the row; double-click: details.
 `Shift+click` keeps the terminal's own text selection working.
 `PID 1`, `psim` and its own parents are refused when ending a process.
 
+## CPU band
+
+Three braille lines under the footer, full width, with an `instant cpu N %`
+badge on the right of the first one.
+
+```
+TOTAL (displayed)    4682   61.8   23/182 proc
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣠⣴⣶⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿   instant cpu  68 %
+⠀⠀⠀⠀⣀⣀⣤⣤⣶⣶⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+⣀⣀⣤⣤⣶⣶⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+```
+
+This is psim's only **instantaneous** measure: two readings of `/proc/stat`
+(first line, all cores) give the busy share of the machine, while the `%CPU`
+column stays the average `ps` reports over each process's lifetime — a value
+that barely moves from one refresh to the next.
+
+- one braille character holds 2 dots horizontally and 4 vertically: the band is
+  `2 × width` samples wide and `4 × height` levels tall (12 over three lines,
+  steps of 8.3 %);
+- the window is `2 × width` samples, so 30 s at 120 columns and 0.25 s;
+- any non-zero value lights at least one dot;
+- `BAND=0..3` (default 3) sets the height, the `b` key hides or recalls the
+  band; it disappears by itself when the table would keep fewer than five rows,
+  and never exists in a pipe or with `--N`;
+- frozen with the rest (`F`): no sample is taken, the band keeps the moment you
+  froze it;
+- measured cost: ~8 ms per frame for three 120-column lines, i.e. +0.8 % of one
+  core at 1 Hz.
+
 ## Configuration
 
 `~/.config/psim/default.conf`, one `KEY=VALUE` per line. The file is never

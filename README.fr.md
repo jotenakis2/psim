@@ -160,6 +160,38 @@ Clic : sélection de la ligne ; double-clic : détails.
 `Maj+clic` laisse la sélection de texte du terminal opérationnelle.
 `PID 1`, `psim` et ses propres parents sont refusés à la terminaison.
 
+## Bandeau CPU
+
+Trois lignes de braille sous le pied de page, sur toute la largeur, avec un
+badge `instant cpu N %` aligné à droite de la première.
+
+```
+TOTAL (affiché)      4682   61.8   23/182 proc
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣠⣴⣶⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿   instant cpu  68 %
+⠀⠀⠀⠀⣀⣀⣤⣤⣶⣶⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+⣀⣀⣤⣤⣶⣶⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+```
+
+C'est la seule mesure **instantanée** de psim : deux relevés de `/proc/stat`
+(première ligne, tous les cœurs) donnent la part occupée de la machine, là où
+le `%CPU` des lignes reste la moyenne que `ps` rapporte sur la vie de chaque
+processus — une valeur qui ne bouge presque pas d'un rafraîchissement à
+l'autre.
+
+- un caractère braille porte 2 points en largeur et 4 en hauteur : la bande
+  fait `2 × largeur` échantillons de large et `4 × hauteur` niveaux (12 sur
+  trois lignes, paliers de 8,3 %) ;
+- la fenêtre est de `2 × largeur` échantillons, soit 30 s à 120 colonnes et
+  0,25 s ;
+- une valeur non nulle allume toujours au moins un point ;
+- `BAND=0..3` (défaut 3) règle la hauteur, la touche `b` masque ou rappelle la
+  bande ; elle s'efface d'elle-même si le tableau ne garderait pas cinq lignes,
+  et n'existe ni en pipe ni avec `--N` ;
+- gelée avec le reste (`F`) : aucun échantillon n'est pris, la bande reste
+  celle du moment du gel ;
+- coût mesuré : ~8 ms par trame pour trois lignes de 120 colonnes, soit +0,8 %
+  d'un cœur à 1 Hz.
+
 ## Configuration
 
 `~/.config/psim/default.conf`, une clé `CLÉ=VALEUR` par ligne. Le fichier n'est
